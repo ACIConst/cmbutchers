@@ -301,7 +301,7 @@ function AdminDashboard({ menu, users, orders, dbOps, isMobile, isTablet }) {
 // MENU MANAGER — Full CRUD + kiosk toggle + drag reorder (no stock/SKU)
 // ═══════════════════════════════════════════════════════════════════════════════
 function MenuManager({ menu, catNames, dbOps, showToast, isMobile }) {
-  const blank={name:"",description:"",price:"",category:catNames[0]||"Other",image:"",isBundle:false,bundleItems:[],showOnKiosk:true};
+  const blank={name:"",description:"",price:"",category:catNames[0]||"Other",image:"",isBundle:false,bundleItems:[],showOnKiosk:true,stock:"",inStock:true};
   const [editing,setEditing]=useState(null);const [isNew,setIsNew]=useState(false);const [search,setSearch]=useState("");const [filter,setFilter]=useState("All");const [viewFilter,setViewFilter]=useState("all");const [confirmDel,setConfirmDel]=useState(null);const [saving,setSaving]=useState({});const [dragIdx,setDragIdx]=useState(null);const [overIdx,setOverIdx]=useState(null);const dragNodeRef=useRef(null);
   const onCount=menu.filter(i=>i.showOnKiosk!==false).length;const offCount=menu.length-onCount;
   const onMenuSorted=menu.filter(i=>i.showOnKiosk!==false).sort((a,b)=>(a.menuOrder||999)-(b.menuOrder||999));
