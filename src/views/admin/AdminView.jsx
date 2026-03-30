@@ -29,7 +29,7 @@ import {
 import { Img } from "../../components/Img";
 import { isOrderingOpen, getWeekOf, fmt$, fmtDate } from "../../utils";
 
-import { collection, doc, addDoc, writeBatch } from "firebase/firestore";
+import { collection, doc, addDoc, writeBatch } from "firebase/firestore"; import { getAuth, signOut } from "firebase/auth";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db } from "../../config/firebase";
 
@@ -111,7 +111,7 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, db
           <div style={{width:34,height:34,borderRadius:"50%",background:C.red,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:C.cream,flexShrink:0}}>{loggedInAdmin.name.charAt(0).toUpperCase()}</div>
           <div style={{overflow:"hidden"}}><div style={{fontSize:13,color:C.cream,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{loggedInAdmin.name}</div><div style={{fontSize:10,color:C.muted,letterSpacing:1}}>{loggedInAdmin.role}</div></div>
         </div>
-        <button className="nav-btn" onClick={()=>setLoggedInAdmin(null)} style={{display:"flex",alignItems:"center",gap:8,width:"100%",background:"transparent",border:"1px solid "+C.border,color:C.muted,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:13,fontFamily:F.body,marginBottom:4,textAlign:"left",transition:"all .15s"}}>{"\u{1F513}"} Log Out</button>
+        <button className="nav-btn" onClick={()=>{setLoggedInAdmin(null);signOut(getAuth());}} style={{display:"flex",alignItems:"center",gap:8,width:"100%",background:"transparent",border:"1px solid "+C.border,color:C.muted,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:13,fontFamily:F.body,marginBottom:4,textAlign:"left",transition:"all .15s"}}>{"\u{1F513}"} Log Out</button>
         <button className="nav-btn" onClick={onExit} style={{display:"flex",alignItems:"center",gap:8,width:"100%",background:"transparent",border:"1px solid transparent",color:C.muted,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:13,fontFamily:F.body,textAlign:"left",transition:"all .15s"}}>{"\u2B05"} Exit Admin</button>
       </div>
     </>
