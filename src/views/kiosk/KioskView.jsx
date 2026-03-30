@@ -309,10 +309,10 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
                   <div style={{fontSize:13,color:C.muted,marginTop:4}}>Enter your email & password to place order</div>
                 </div>
                 <div style={{marginBottom:12}}>
-                  <input type="email" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthErr("");}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Email address" autoCapitalize="none" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  <input type="email" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthErr("");}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Email address" autoCapitalize="none" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
                 </div>
                 <div style={{marginBottom:14,position:"relative"}}>
-                  <input type={showLoginPass?"text":"password"} value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthErr("");}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Password" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  <input type={showLoginPass?"text":"password"} value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthErr("");}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Password" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
                   <button onClick={()=>setShowLoginPass(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:18,lineHeight:1,padding:"4px"}}>{showLoginPass?"\u{1F648}":"\u{1F441}"}</button>
                 </div>
                 {authErr&&<div style={{background:authErr.startsWith("Password updated")?"rgba(22,101,52,.2)":C.errorBg,color:authErr.startsWith("Password updated")?C.greenText:C.errorText,border:"1px solid "+(authErr.startsWith("Password updated")?"rgba(74,222,128,.2)":"transparent"),borderRadius:8,padding:"9px 14px",fontSize:13,marginBottom:12}}>{authErr}</div>}
@@ -335,7 +335,7 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
 
                 {resetStep===1&&<>
                   <div style={{marginBottom:12}}>
-                    <input type="email" value={resetEmail} onChange={e=>{setResetEmail(e.target.value);setResetErr("");}} placeholder="Email address" autoCapitalize="none" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                    <input type="email" value={resetEmail} onChange={e=>{setResetEmail(e.target.value);setResetErr("");}} placeholder="Email address" autoCapitalize="none" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
                   </div>
                   <div style={{marginBottom:14}}>
                     <input type="tel" value={resetPhone} onChange={e=>{setResetPhone(e.target.value);setResetErr("");}} placeholder="Phone number on file" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
@@ -379,7 +379,7 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
                   <input type="tel" value={regPhone} onChange={e=>setRegPhone(e.target.value)} placeholder="Phone number" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
                 </div>
                 <div style={{marginBottom:10,position:"relative"}}>
-                  <input type={showRegPass?"text":"password"} value={regPass} onChange={e=>setRegPass(e.target.value)} placeholder="Create a password" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  <input type={showRegPass?"text":"password"} value={regPass} onChange={e=>setRegPass(e.target.value)} placeholder="Create a password" autoComplete="new-password" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
                   <button onClick={()=>setShowRegPass(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:18,lineHeight:1,padding:"4px"}}>{showRegPass?"\u{1F648}":"\u{1F441}"}</button>
                 </div>
                 <div style={{marginBottom:14}}>
