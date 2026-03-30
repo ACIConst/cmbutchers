@@ -49,15 +49,17 @@ export const ORDER_STATUSES = [
   { id:"picking",          label:"Picking",           color:"#1e40af", text:"#93c5fd" },
   { id:"out_for_delivery", label:"Out for Delivery",  color:"#0e7490", text:"#67e8f9" },
   { id:"delivered",        label:"Delivered",          color:"#166534", text:"#4ade80" },
+  { id:"cancelled",        label:"Cancelled",         color:"#450a0a", text:"#f87171" },
 ];
 
 // Valid status transitions (forward only, no skipping)
 export const VALID_TRANSITIONS = {
-  placed:           ["paid"],
-  paid:             ["picking"],
-  picking:          ["out_for_delivery"],
-  out_for_delivery: ["delivered"],
+  placed:           ["paid", "cancelled"],
+  paid:             ["picking", "cancelled"],
+  picking:          ["out_for_delivery", "cancelled"],
+  out_for_delivery: ["delivered", "cancelled"],
   delivered:        [],
+  cancelled:        [],
 };
 
 export function canTransition(from, to) {
