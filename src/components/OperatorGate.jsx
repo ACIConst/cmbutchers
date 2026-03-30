@@ -78,4 +78,12 @@ export default function OperatorGate({ children }) {
             width: "100%", background: loading ? "#444" : "#2563eb",
             border: "none", color: "#fff", borderRadius: 8, padding: 14,
             fontSize: 16, fontWeight: 700, cursor: loading ? "default" : "pointer",
-            opacity: (!email || !password
+            opacity: (!email || !password) ? 0.5 : 1,
+          }}
+        >
+          {loading ? "Signing in..." : "Sign In"}
+        </button>
+      </div>
+    </div>
+  );
+}
