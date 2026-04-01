@@ -22,6 +22,7 @@ import {
 import { useInventoryAdjustments } from "../../hooks/useInventoryAdjustments";
 import { useAuditLogs } from "../../hooks/useAuditLogs";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 import {
   Modal, ConfirmModal, Field, Btn, ModeLoadingScreen,
   StatusBadge, inputSt, smallBtn, openPrintWindow,
@@ -61,6 +62,7 @@ function useWindowSize(){const [s,set]=useState({w:typeof window!=="undefined"?w
 // ═══════════════════════════════════════════════════════════════════════════════
 function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, dbOps, adjustments, auditLogs, onExit }) {
   const [loggedInAdmin, setLoggedInAdmin] = useState(null);
+  const { setAdmin } = useAuth();
   const [tab, setTab] = useState("dashboard");
   const [toast, setToast] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -70,12 +72,14 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, db
   const isTablet=w>=768&&w<1024;
   const showSidebarPermanent=w>=1024;
 
+  useEffect(()=>{ setAdmin(loggedInAdmin); return ()=>setAdmin(null); },[loggedInAdmin, setAdmin]);
+
   function showToast(msg, type="success") { setToast({msg,type}); setTimeout(()=>setToast(null),3500); }
   const resetSessionTimer = useCallback(()=>{clearTimeout(sessionTimerRef.current);if(loggedInAdmin) sessionTimerRef.current=setTimeout(()=>{setLoggedInAdmin(null);setTab("dashboard");},ADMIN_SESSION_MS);},[loggedInAdmin]);
   useEffect(()=>{ resetSessionTimer(); return()=>clearTimeout(sessionTimerRef.current); },[resetSessionTimer]);
   useEffect(()=>{if(!loggedInAdmin)return;const events=["mousedown","keydown","touchstart"];events.forEach(e=>document.addEventListener(e,resetSessionTimer,{passive:true}));return()=>events.forEach(e=>document.removeEventListener(e,resetSessionTimer));},[resetSessionTimer,loggedInAdmin]);
 
- if(!loggedInAdmin) { setLoggedInAdmin({ name: "Admin", role: "Super Admin" }); return null; }
+ if(!loggedInAdmin) return <AdminLogin adminAccounts={adminAccounts} onAuth={setLoggedInAdmin} onExit={onExit} />;
 
   const isSuperAdmin=loggedInAdmin.role==="Super Admin";
   const deliveryCount=orders.filter(o=>!o.archived&&normalizeStatus(o.status)==="out_for_delivery").length;
