@@ -3,11 +3,16 @@ import { db } from "../../config/firebase";
 import { writeAuditLog } from "./audit";
 
 export async function addCategoryDoc(data, actor = {}) {
-  const ref = await addDoc(collection(db, "kioskCategories"), {
-    ...data,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  let ref;
+  try {
+    ref = await addDoc(collection(db, "kioskCategories"), {
+      ...data,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    throw new Error(`Failed to add category: ${e.message}`);
+  }
   await writeAuditLog({
     action: "category.created",
     actorId: actor.actorId,
@@ -23,7 +28,11 @@ export async function addCategoryDoc(data, actor = {}) {
 export async function updateCategoryDoc(id, data, actor = {}) {
   const ref = doc(db, "kioskCategories", id);
   const before = await getDoc(ref);
-  await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+  try {
+    await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+  } catch (e) {
+    throw new Error(`Failed to update category ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "category.updated",
     actorId: actor.actorId,
@@ -39,7 +48,11 @@ export async function updateCategoryDoc(id, data, actor = {}) {
 export async function deleteCategoryDoc(id, actor = {}) {
   const ref = doc(db, "kioskCategories", id);
   const before = await getDoc(ref);
-  await deleteDoc(ref);
+  try {
+    await deleteDoc(ref);
+  } catch (e) {
+    throw new Error(`Failed to delete category ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "category.deleted",
     actorId: actor.actorId,
@@ -58,7 +71,11 @@ export async function renameCategoryWithMenu(menu, categories, id, newName, acto
     batch.update(doc(db, "kioskMenu", item.id), { category: newName.trim(), updatedAt: serverTimestamp() });
   });
   batch.update(doc(db, "kioskCategories", id), { name: newName.trim(), updatedAt: serverTimestamp() });
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (e) {
+    throw new Error(`Failed to rename category: ${e.message}`);
+  }
   await writeAuditLog({
     action: "category.renamed",
     actorId: actor.actorId,
@@ -78,7 +95,11 @@ export async function reorderCategory(categories, id, direction, actor = {}) {
   const batch = writeBatch(db);
   batch.update(doc(db, "kioskCategories", categories[idx].id), { sortOrder: categories[swap].sortOrder, updatedAt: serverTimestamp() });
   batch.update(doc(db, "kioskCategories", categories[swap].id), { sortOrder: categories[idx].sortOrder, updatedAt: serverTimestamp() });
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (e) {
+    throw new Error(`Failed to reorder category: ${e.message}`);
+  }
   await writeAuditLog({
     action: "category.reordered",
     actorId: actor.actorId,

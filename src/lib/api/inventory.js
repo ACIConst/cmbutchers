@@ -13,18 +13,22 @@ export async function logInventoryAdjustment({
   actorName = "system",
   relatedOrderId = null,
 }) {
-  await addDoc(collection(db, "inventoryAdjustments"), {
-    itemId,
-    itemName,
-    beforeQty,
-    afterQty,
-    delta,
-    reason,
-    actorId,
-    actorName,
-    relatedOrderId,
-    createdAt: serverTimestamp(),
-  });
+  try {
+    await addDoc(collection(db, "inventoryAdjustments"), {
+      itemId,
+      itemName,
+      beforeQty,
+      afterQty,
+      delta,
+      reason,
+      actorId,
+      actorName,
+      relatedOrderId,
+      createdAt: serverTimestamp(),
+    });
+  } catch (e) {
+    throw new Error(`Failed to log inventory adjustment: ${e.message}`);
+  }
 
   await writeAuditLog({
     action: "inventory.adjusted",
@@ -39,11 +43,15 @@ export async function logInventoryAdjustment({
 }
 
 export async function adjustInventory({ itemId, itemName, beforeQty, afterQty, reason, actorId, actorName, relatedOrderId = null }) {
-  await updateDoc(doc(db, "kioskMenu", itemId), {
-    stock: afterQty,
-    inStock: afterQty > 0,
-    updatedAt: serverTimestamp(),
-  });
+  try {
+    await updateDoc(doc(db, "kioskMenu", itemId), {
+      stock: afterQty,
+      inStock: afterQty > 0,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    throw new Error(`Failed to adjust inventory for ${itemName || itemId}: ${e.message}`);
+  }
 
   await logInventoryAdjustment({
     itemId,

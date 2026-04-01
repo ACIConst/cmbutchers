@@ -6,7 +6,7 @@
  * employees, orders, order board (pick tickets, chime), delivery,
  * admin accounts, inventory history, and audit log.
  *
- * Auth: FNV-1a hash against kioskAdmins collection (Firebase Auth migration pending).
+ * Auth: Firebase Auth (OperatorGate) + kioskUsers role check (Super Admin / manager).
  * Inventory: SKU/barcode managed here; QuickBooks integration planned as external source of truth.
  */
 
@@ -17,7 +17,7 @@ import {
 } from "../../styles/tokens";
 import {
   useMenu, useUsers, useOrders, useCategories, useAdmins,
-  createDbOps, hashPassword, runSeeds,
+  createDbOps, runSeeds,
 } from "../../hooks/useFirestore";
 import { useInventoryAdjustments } from "../../hooks/useInventoryAdjustments";
 import { useAuditLogs } from "../../hooks/useAuditLogs";
@@ -61,8 +61,7 @@ function useWindowSize(){const [s,set]=useState({w:typeof window!=="undefined"?w
 // AdminApp — responsive sidebar + tab routing
 // ═══════════════════════════════════════════════════════════════════════════════
 function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, dbOps, adjustments, auditLogs, onExit }) {
-  const [loggedInAdmin, setLoggedInAdmin] = useState(null);
-  const { setAdmin } = useAuth();
+  const { user, setAdmin } = useAuth();
   const [tab, setTab] = useState("dashboard");
   const [toast, setToast] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -72,14 +71,23 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, db
   const isTablet=w>=768&&w<1024;
   const showSidebarPermanent=w>=1024;
 
+  // Derive admin identity from Firebase Auth user + kioskUsers role
+  console.log("USER EMAILS:", users.map(u => u.email), "AUTH EMAIL:", user?.email);
+  const ADMIN_ROLES = ["Super Admin", "manager", "super_admin"];
+  const kioskUser = users.find(u => u.email && u.email.toLowerCase() === user?.email?.toLowerCase());
+  const loggedInAdmin = kioskUser && ADMIN_ROLES.includes(kioskUser.role)
+    ? { id: kioskUser.id, name: ((kioskUser.firstName || "") + " " + (kioskUser.lastName || "")).trim() || user.email, role: kioskUser.role === "super_admin" ? "Super Admin" : kioskUser.role }
+    : null;
+
   useEffect(()=>{ setAdmin(loggedInAdmin); return ()=>setAdmin(null); },[loggedInAdmin, setAdmin]);
 
   function showToast(msg, type="success") { setToast({msg,type}); setTimeout(()=>setToast(null),3500); }
-  const resetSessionTimer = useCallback(()=>{clearTimeout(sessionTimerRef.current);if(loggedInAdmin) sessionTimerRef.current=setTimeout(()=>{setLoggedInAdmin(null);setTab("dashboard");},ADMIN_SESSION_MS);},[loggedInAdmin]);
+  const handleLogout = useCallback(()=>{signOut(getAuth());},[]);
+  const resetSessionTimer = useCallback(()=>{clearTimeout(sessionTimerRef.current);if(loggedInAdmin) sessionTimerRef.current=setTimeout(()=>{handleLogout();},ADMIN_SESSION_MS);},[loggedInAdmin,handleLogout]);
   useEffect(()=>{ resetSessionTimer(); return()=>clearTimeout(sessionTimerRef.current); },[resetSessionTimer]);
   useEffect(()=>{if(!loggedInAdmin)return;const events=["mousedown","keydown","touchstart"];events.forEach(e=>document.addEventListener(e,resetSessionTimer,{passive:true}));return()=>events.forEach(e=>document.removeEventListener(e,resetSessionTimer));},[resetSessionTimer,loggedInAdmin]);
 
- if(!loggedInAdmin) return <AdminLogin adminAccounts={adminAccounts} onAuth={setLoggedInAdmin} onExit={onExit} />;
+  if(!loggedInAdmin) return <AccessDenied email={user?.email} onLogout={handleLogout} onExit={onExit} />;
 
   const isSuperAdmin=loggedInAdmin.role==="Super Admin";
   const deliveryCount=orders.filter(o=>!o.archived&&normalizeStatus(o.status)==="out_for_delivery").length;
@@ -115,7 +123,7 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, db
           <div style={{width:34,height:34,borderRadius:"50%",background:C.red,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:C.cream,flexShrink:0}}>{loggedInAdmin.name.charAt(0).toUpperCase()}</div>
           <div style={{overflow:"hidden"}}><div style={{fontSize:13,color:C.cream,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{loggedInAdmin.name}</div><div style={{fontSize:10,color:C.muted,letterSpacing:1}}>{loggedInAdmin.role}</div></div>
         </div>
-        <button className="nav-btn" onClick={()=>{setLoggedInAdmin(null);signOut(getAuth());}} style={{display:"flex",alignItems:"center",gap:8,width:"100%",background:"transparent",border:"1px solid "+C.border,color:C.muted,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:13,fontFamily:F.body,marginBottom:4,textAlign:"left",transition:"all .15s"}}>{"\u{1F513}"} Log Out</button>
+        <button className="nav-btn" onClick={handleLogout} style={{display:"flex",alignItems:"center",gap:8,width:"100%",background:"transparent",border:"1px solid "+C.border,color:C.muted,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:13,fontFamily:F.body,marginBottom:4,textAlign:"left",transition:"all .15s"}}>{"\u{1F513}"} Log Out</button>
         <button className="nav-btn" onClick={onExit} style={{display:"flex",alignItems:"center",gap:8,width:"100%",background:"transparent",border:"1px solid transparent",color:C.muted,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:13,fontFamily:F.body,textAlign:"left",transition:"all .15s"}}>{"\u2B05"} Exit Admin</button>
       </div>
     </>
@@ -172,31 +180,21 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, db
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Admin Login
+// Access Denied
 // ═══════════════════════════════════════════════════════════════════════════════
-function AdminLogin({ adminAccounts, onAuth, onExit }) {
-  const [username, setUsername]=useState("");const [password, setPassword]=useState("");const [showPass, setShowPass]=useState(false);const [error, setError]=useState("");const [shaking, setShaking]=useState(false);const [attempts, setAttempts]=useState(0);const [lockoutSecs, setLockoutSecs]=useState(0);const [loading, setLoading]=useState(false);
-  const userRef = useRef();
-  useEffect(()=>{userRef.current?.focus();},[]);
-  useEffect(()=>{if(lockoutSecs<=0)return;const t=setTimeout(()=>setLockoutSecs(s=>s-1),1000);return()=>clearTimeout(t);},[lockoutSecs]);
-  async function attempt() {
-    if(lockoutSecs>0||loading)return;if(!username.trim()||!password){setError("Please enter your username and password.");return;}
-    setLoading(true);setError("");
-    try{const hash=hashPassword(password);const admin=adminAccounts.find(a=>a.username.toLowerCase()===username.trim().toLowerCase()&&a.passwordHash===hash);
-      if(admin){onAuth(admin);}else{const next=attempts+1;setAttempts(next);const exists=adminAccounts.find(a=>a.username.toLowerCase()===username.trim().toLowerCase());setError(exists?"Incorrect password":"Username not found");setShaking(true);setPassword("");if(next>=5){setLockoutSecs(60);setAttempts(0);setError("Too many attempts. Locked for 60s.");}setTimeout(()=>setShaking(false),700);}
-    }finally{setLoading(false);}
-  }
+function AccessDenied({ email, onLogout, onExit }) {
   return (
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:F.body,color:C.cream,padding:40}}>
       <img src="/Champs%20Meats.svg" alt="Champs Meats" style={{height:"60px",width:"auto",objectFit:"contain",marginBottom:14}}/>
-      <div style={{fontFamily:F.display,fontSize:26,fontWeight:900,letterSpacing:4,color:C.cream,marginBottom:4}}>ADMIN ACCESS</div>
-      <div style={{fontSize:14,color:C.muted,marginBottom:32}}>Sign in with your admin credentials</div>
-      <div style={{background:C.surface,border:"1px solid "+C.borderMid,borderRadius:18,padding:"34px 36px",width:380,maxWidth:"95vw",animation:shaking?"shake .6s ease":"scaleIn .3s ease",boxShadow:"0 24px 60px rgba(0,0,0,.7)"}}>
-        <div style={{marginBottom:16}}><label style={{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:C.muted,display:"block",marginBottom:7}}>Username</label><input ref={userRef} type="text" value={username} onChange={e=>{setUsername(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&attempt()} placeholder="Enter your username" autoCapitalize="none" autoCorrect="off" spellCheck="false" disabled={lockoutSecs>0} style={{width:"100%",background:C.card,border:"1px solid "+(error?C.red:C.borderMid),borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15,transition:"border .2s"}}/></div>
-        <div style={{marginBottom:20}}><label style={{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:C.muted,display:"block",marginBottom:7}}>Password</label><div style={{position:"relative"}}><input type={showPass?"text":"password"} value={password} onChange={e=>{setPassword(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&attempt()} placeholder="Enter your password" disabled={lockoutSecs>0} style={{width:"100%",background:C.card,border:"1px solid "+(error?C.red:C.borderMid),borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15,transition:"border .2s"}}/><button onClick={()=>setShowPass(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:17,lineHeight:1}}>{showPass?"\u{1F648}":"\u{1F441}"}</button></div></div>
-        {error&&<div style={{background:C.errorBg,color:C.errorText,borderRadius:8,padding:"9px 14px",fontSize:13,marginBottom:14}}>{error}{lockoutSecs>0?" ("+lockoutSecs+"s)":""}</div>}
-        <button onClick={attempt} disabled={lockoutSecs>0||!username.trim()||!password||loading} style={{width:"100%",background:lockoutSecs>0||!username.trim()||!password?C.border:C.red,border:"none",color:C.cream,borderRadius:10,padding:"14px",fontSize:16,fontWeight:700,cursor:lockoutSecs>0?"not-allowed":"pointer",fontFamily:F.body,transition:"background .2s",opacity:lockoutSecs>0?.6:1}}>{loading?"Signing in\u2026":lockoutSecs>0?"Locked \u2014 wait "+lockoutSecs+"s":"Sign In to Admin Panel"}</button>
-        <button onClick={onExit} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",width:"100%",marginTop:12,fontFamily:F.body,fontSize:14,padding:"8px 0"}}>{"\u2190"} Back to Mode Select</button>
+      <div style={{fontFamily:F.display,fontSize:26,fontWeight:900,letterSpacing:4,color:C.cream,marginBottom:4}}>ACCESS DENIED</div>
+      <div style={{fontSize:14,color:C.muted,marginBottom:32}}>Your account does not have admin privileges</div>
+      <div style={{background:C.surface,border:"1px solid "+C.borderMid,borderRadius:18,padding:"34px 36px",width:420,maxWidth:"95vw",animation:"scaleIn .3s ease",boxShadow:"0 24px 60px rgba(0,0,0,.7)",textAlign:"center"}}>
+        <div style={{width:64,height:64,borderRadius:"50%",background:C.errorBg,border:"2px solid "+C.errorText,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 18px"}}>&#x1F6AB;</div>
+        <div style={{fontSize:15,color:C.cream,marginBottom:6}}>Signed in as</div>
+        <div style={{fontFamily:F.mono,fontSize:14,color:C.muted,marginBottom:20,wordBreak:"break-all"}}>{email || "unknown"}</div>
+        <div style={{background:C.errorBg,border:"1px solid "+C.red,borderRadius:10,padding:"12px 16px",fontSize:13,color:C.errorText,marginBottom:24,lineHeight:1.5}}>This account is not assigned a <strong>Super Admin</strong> or <strong>Manager</strong> role. Contact an administrator to request access.</div>
+        <button onClick={onLogout} style={{width:"100%",background:C.red,border:"none",color:C.cream,borderRadius:10,padding:"14px",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:F.body,marginBottom:10}}>Sign Out &amp; Try Another Account</button>
+        <button onClick={onExit} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",width:"100%",fontFamily:F.body,fontSize:14,padding:"8px 0"}}>{"\u2190"} Back to Mode Select</button>
       </div>
     </div>
   );
@@ -307,6 +305,7 @@ function AdminDashboard({ menu, users, orders, dbOps, isMobile, isTablet }) {
 function MenuManager({ menu, catNames, dbOps, showToast, isMobile }) {
   const blank={name:"",description:"",price:"",category:catNames[0]||"Other",image:"",isBundle:false,bundleItems:[],showOnKiosk:true,stock:"",inStock:true};
   const [editing,setEditing]=useState(null);const [isNew,setIsNew]=useState(false);const [search,setSearch]=useState("");const [filter,setFilter]=useState("All");const [viewFilter,setViewFilter]=useState("all");const [confirmDel,setConfirmDel]=useState(null);const [saving,setSaving]=useState({});const [dragIdx,setDragIdx]=useState(null);const [overIdx,setOverIdx]=useState(null);const dragNodeRef=useRef(null);
+  const [selectMode,setSelectMode]=useState(false);const [selected,setSelected]=useState(new Set());const [confirmBulkDel,setConfirmBulkDel]=useState(false);
   const onCount=menu.filter(i=>i.showOnKiosk!==false).length;const offCount=menu.length-onCount;
   const onMenuSorted=menu.filter(i=>i.showOnKiosk!==false).sort((a,b)=>(a.menuOrder||999)-(b.menuOrder||999));
   const displayed=menu.filter(i=>{const matchCat=filter==="All"||i.category===filter;const matchSearch=i.name.toLowerCase().includes(search.toLowerCase());const matchView=viewFilter==="all"||(viewFilter==="on"&&i.showOnKiosk!==false)||(viewFilter==="off"&&i.showOnKiosk===false);return matchCat&&matchSearch&&matchView;}).sort((a,b)=>{const aOn=a.showOnKiosk!==false?0:1;const bOn=b.showOnKiosk!==false?0:1;if(aOn!==bOn)return aOn-bOn;return(a.menuOrder||999)-(b.menuOrder||999);});
@@ -317,7 +316,9 @@ function MenuManager({ menu, catNames, dbOps, showToast, isMobile }) {
   function handleDragOver(e,idx){e.preventDefault();e.dataTransfer.dropEffect="move";if(idx!==overIdx)setOverIdx(idx);}
   async function handleDrop(e,dropIdx){e.preventDefault();if(dragIdx===null||dragIdx===dropIdx){setDragIdx(null);setOverIdx(null);return;}const dragItem=onMenuSorted[dragIdx];const dropItem=onMenuSorted[dropIdx];if(!dragItem||!dropItem)return;const orderA=dragItem.menuOrder??dragIdx;const orderB=dropItem.menuOrder??dropIdx;setSaving(prev=>({...prev,[dragItem.id]:true,[dropItem.id]:true}));try{await dbOps.updateMenuItem(dragItem.id,{menuOrder:orderB});await dbOps.updateMenuItem(dropItem.id,{menuOrder:orderA});}catch(e2){console.error(e2);showToast("Reorder failed","error");}finally{setSaving(prev=>{const n={...prev};delete n[dragItem.id];delete n[dropItem.id];return n;});}setDragIdx(null);setOverIdx(null);}
   function handleDragEnd(){if(dragNodeRef.current)dragNodeRef.current.style.opacity="1";setDragIdx(null);setOverIdx(null);dragNodeRef.current=null;}
-  async function autoNumberAll(){setSaving(prev=>({...prev,_bulk:true}));try{for(let i=0;i<onMenuSorted.length;i++){if(onMenuSorted[i].menuOrder!==i)await dbOps.updateMenuItem(onMenuSorted[i].id,{menuOrder:i});}showToast("Menu order saved");}catch(e){console.error(e);showToast("Reorder failed","error");}finally{setSaving(prev=>{const n={...prev};delete n._bulk;return n;});}}
+  function toggleSelect(id){setSelected(prev=>{const next=new Set(prev);if(next.has(id))next.delete(id);else next.add(id);return next;});}
+  function toggleSelectAll(){const visibleIds=displayed.map(i=>i.id);const allSelected=visibleIds.length>0&&visibleIds.every(id=>selected.has(id));if(allSelected){setSelected(prev=>{const next=new Set(prev);visibleIds.forEach(id=>next.delete(id));return next;});}else{setSelected(prev=>{const next=new Set(prev);visibleIds.forEach(id=>next.add(id));return next;});}}
+  async function deleteSelected(){if(selected.size===0)return;setSaving(prev=>({...prev,_bulk:true}));try{for(const id of selected){await dbOps.deleteMenuItem(id);}showToast(selected.size+" item"+(selected.size!==1?"s":"")+" deleted","error");setSelected(new Set());}catch(e){console.error(e);showToast("Delete failed","error");}finally{setSaving(prev=>{const n={...prev};delete n._bulk;return n;});}}
   return (
     <div style={{animation:"fadeUp .3s ease"}}>
       <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr 1fr":"repeat(3,1fr)",gap:isMobile?8:12,marginBottom:20}}>
@@ -328,13 +329,15 @@ function MenuManager({ menu, catNames, dbOps, showToast, isMobile }) {
         <select value={filter} onChange={e=>setFilter(e.target.value)} style={inputSt(true)}><option value="All">All Categories</option>{catNames.map(c=><option key={c} value={c}>{c}</option>)}</select>
         <div style={{display:"flex",gap:4,background:C.card,border:"1px solid "+C.border,borderRadius:10,padding:3}}>{[{id:"all",label:"All ("+menu.length+")"},{id:"on",label:"On ("+onCount+")"},{id:"off",label:"Off ("+offCount+")"}].map(f=><button key={f.id} onClick={()=>setViewFilter(f.id)} style={{background:viewFilter===f.id?C.surface:"transparent",border:"1px solid "+(viewFilter===f.id?C.borderMid:"transparent"),color:viewFilter===f.id?C.cream:C.muted,borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:F.body,fontSize:12,fontWeight:600,transition:"all .15s"}}>{f.label}</button>)}</div>
         <Btn primary onClick={()=>{setEditing({...blank,category:catNames[0]||"Other"});setIsNew(true);}}>+ Add Item</Btn>
+        <button onClick={()=>{setSelectMode(p=>!p);if(selectMode)setSelected(new Set());}} style={{background:selectMode?C.surface:"rgba(255,255,255,.03)",border:"1px solid "+(selectMode?C.red:C.border),color:selectMode?C.cream:C.muted,borderRadius:8,padding:"7px 14px",cursor:"pointer",fontFamily:F.body,fontSize:12,fontWeight:700,transition:"all .15s"}}>{selectMode?"\u2717 Cancel":"\u2610 Select"}</button>
+        {selectMode&&selected.size>0&&<button onClick={()=>setConfirmBulkDel(true)} disabled={saving._bulk} style={{background:C.red,border:"none",color:C.cream,borderRadius:8,padding:"7px 14px",cursor:saving._bulk?"wait":"pointer",fontFamily:F.body,fontSize:12,fontWeight:700,opacity:saving._bulk?.5:1}}>Delete Selected ({selected.size})</button>}
       </div>
-      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}><button onClick={autoNumberAll} disabled={saving._bulk} style={{background:"rgba(255,255,255,.03)",border:"1px solid "+C.border,color:C.muted,borderRadius:8,padding:"7px 14px",cursor:"pointer",fontFamily:F.body,fontSize:12,fontWeight:700,opacity:saving._bulk?.5:1}}>{saving._bulk?"Saving...":"\u2195 Re-number Order"}</button></div>
       <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:14,overflow:"hidden"}}><div style={{overflowX:"auto"}}><div style={{minWidth:750}}>
-        <div style={{display:"grid",gridTemplateColumns:"44px 60px 1fr 130px 90px 100px 140px",borderBottom:"1px solid "+C.border,padding:"9px 16px"}}>{["","Image","Name","Category","Price","Kiosk","Actions"].map(h=><div key={h||"order"} style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:C.muted}}>{h}</div>)}</div>
+        <div style={{display:"grid",gridTemplateColumns:(selectMode?"36px ":"")+"44px 60px 1fr 130px 90px 100px 140px",borderBottom:"1px solid "+C.border,padding:"9px 16px",alignItems:"center"}}>{selectMode&&<div style={{display:"flex",alignItems:"center",justifyContent:"center"}}><input type="checkbox" checked={displayed.length>0&&displayed.every(i=>selected.has(i.id))} onChange={toggleSelectAll} style={{width:16,height:16,accentColor:C.red,cursor:"pointer"}}/></div>}{["","Image","Name","Category","Price","Kiosk","Actions"].map(h=><div key={h||"order"} style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:C.muted}}>{h}</div>)}</div>
         {displayed.length===0?<div style={{padding:"40px",textAlign:"center",color:C.muted}}>No items found</div>:displayed.map((item,dispIdx)=>{const isOn=item.showOnKiosk!==false;const isSavingThis=saving[item.id];const onIdx=onMenuSorted.indexOf(item);return(
-          <div key={item.id} data-row className="row-hover" draggable={isOn} onDragStart={e=>isOn&&handleDragStart(e,onIdx)} onDragOver={e=>isOn&&handleDragOver(e,onIdx)} onDrop={e=>isOn&&handleDrop(e,onIdx)} onDragEnd={handleDragEnd} style={{display:"grid",gridTemplateColumns:"44px 60px 1fr 130px 90px 100px 140px",borderBottom:"1px solid "+C.border,padding:"10px 16px",alignItems:"center",transition:"background .15s",opacity:isOn?1:.6,background:overIdx===onIdx&&dragIdx!==onIdx?"rgba(155,28,28,.15)":"transparent",borderTop:overIdx===onIdx&&dragIdx!==onIdx?"2px solid "+C.red:"2px solid transparent"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"center",cursor:isOn?"grab":"default",userSelect:"none"}}>{isOn?<span style={{fontSize:18,color:isSavingThis?C.border:C.muted,lineHeight:1}} title="Drag to reorder">{"\u2801\u2801\u2801"}</span>:<span style={{fontSize:10,color:C.border}}>{"\u2014"}</span>}</div>
+          <div key={item.id} data-row className="row-hover" draggable={isOn&&!selectMode} onDragStart={e=>isOn&&!selectMode&&handleDragStart(e,onIdx)} onDragOver={e=>isOn&&!selectMode&&handleDragOver(e,onIdx)} onDrop={e=>isOn&&!selectMode&&handleDrop(e,onIdx)} onDragEnd={handleDragEnd} style={{display:"grid",gridTemplateColumns:(selectMode?"36px ":"")+"44px 60px 1fr 130px 90px 100px 140px",borderBottom:"1px solid "+C.border,padding:"10px 16px",alignItems:"center",transition:"background .15s",opacity:isOn?1:.6,background:selected.has(item.id)?"rgba(155,28,28,.08)":overIdx===onIdx&&dragIdx!==onIdx?"rgba(155,28,28,.15)":"transparent",borderTop:overIdx===onIdx&&dragIdx!==onIdx?"2px solid "+C.red:"2px solid transparent"}}>
+            {selectMode&&<div style={{display:"flex",alignItems:"center",justifyContent:"center"}}><input type="checkbox" checked={selected.has(item.id)} onChange={()=>toggleSelect(item.id)} style={{width:16,height:16,accentColor:C.red,cursor:"pointer"}}/></div>}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",cursor:isOn&&!selectMode?"grab":"default",userSelect:"none"}}>{isOn&&!selectMode?<span style={{fontSize:18,color:isSavingThis?C.border:C.muted,lineHeight:1}} title="Drag to reorder">{"\u2801\u2801\u2801"}</span>:<span style={{fontSize:10,color:C.border}}>{isOn&&selectMode?"":"\u2014"}</span>}</div>
             <Img src={item.image} alt={item.name} style={{width:44,height:44,objectFit:"cover",borderRadius:7,border:"1px solid "+C.border}}/>
             <div><div style={{fontSize:14,color:C.cream,fontWeight:600}}>{item.name}{item.isBundle&&<span style={{background:"#1e40af",color:"#fff",fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:4,marginLeft:8,letterSpacing:1,verticalAlign:"middle"}}>BUNDLE</span>}</div><div style={{fontSize:12,color:C.muted,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:220}}>{item.description}</div></div>
             <div><span style={{background:C.surface,border:"1px solid "+C.border,borderRadius:5,padding:"3px 9px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>{item.category}</span></div>
@@ -345,6 +348,7 @@ function MenuManager({ menu, catNames, dbOps, showToast, isMobile }) {
       </div></div></div>
       {editing&&<ItemModal item={editing} isNew={isNew} saving={saving._save} catNames={catNames} menu={menu} onChange={p=>setEditing(prev=>({...prev,...p}))} onSave={()=>saveItem(editing)} onClose={()=>setEditing(null)}/>}
       {confirmDel&&<ConfirmModal message={"Delete \""+((menu.find(m=>m.id===confirmDel)||{}).name||"")+"\"? This cannot be undone."} confirmLabel="Delete Item" danger onConfirm={()=>deleteItem(confirmDel)} onClose={()=>setConfirmDel(null)}/>}
+      {confirmBulkDel&&<ConfirmModal message={"Delete "+selected.size+" selected item"+(selected.size!==1?"s":"")+"? This cannot be undone."} confirmLabel={"Delete "+selected.size+" Item"+(selected.size!==1?"s":"")} danger onConfirm={()=>{setConfirmBulkDel(false);deleteSelected();}} onClose={()=>setConfirmBulkDel(false)}/>}
     </div>
   );
 }
@@ -572,7 +576,7 @@ function OrderBoardPanel({ orders, users, menu, dbOps, showToast, isMobile }) {
   // Chime on new orders
   useEffect(()=>{
     if(active.length>prevCountRef.current&&prevCountRef.current>0){
-      try{const ctx=new(window.AudioContext||window.webkitAudioContext)();[[880,0],[1100,.15],[1320,.28]].forEach(([freq,t])=>{const o=ctx.createOscillator();const g=ctx.createGain();o.connect(g);g.connect(ctx.destination);o.frequency.value=freq;g.gain.setValueAtTime(0.22,ctx.currentTime+t);g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+t+0.28);o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+0.3);});}catch(e){}
+      try{const ctx=new(window.AudioContext||window.webkitAudioContext)();[[880,0],[1100,.15],[1320,.28]].forEach(([freq,t])=>{const o=ctx.createOscillator();const g=ctx.createGain();o.connect(g);g.connect(ctx.destination);o.frequency.value=freq;g.gain.setValueAtTime(0.22,ctx.currentTime+t);g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+t+0.28);o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+0.3);});}catch(e){console.warn("Audio notification failed:",e);}
       setFlashBg(true);setTimeout(()=>setFlashBg(false),800);
     }
     prevCountRef.current=active.length;
@@ -597,7 +601,7 @@ function OrderBoardPanel({ orders, users, menu, dbOps, showToast, isMobile }) {
       h+='</td></tr>';
       itemsHtml+=h;
     });
-    const skuBcJs=items.map((i,idx)=>{if(i.sku&&!i.barcodeImage){const id=items.slice(0,idx).filter(x=>x.sku&&!x.barcodeImage).length;return'try{JsBarcode("#item-bc-'+id+'","'+i.sku+'",{format:"CODE128",width:1.6,height:30,displayValue:false,margin:0});}catch(e){}';}return'';}).filter(Boolean).join("");
+    const skuBcJs=items.map((i,idx)=>{if(i.sku&&!i.barcodeImage){const id=items.slice(0,idx).filter(x=>x.sku&&!x.barcodeImage).length;return'try{JsBarcode("#item-bc-'+id+'","'+i.sku+'",{format:"CODE128",width:1.6,height:30,displayValue:false,margin:0});}catch(e){console.warn("Barcode render failed:",e);}';}return'';}).filter(Boolean).join("");
     const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Pick Ticket #${order.orderNumber||""}</title>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
 <style>
@@ -660,7 +664,7 @@ thead th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:
 <div class="summary"><div class="summary-count">${items.reduce((s,i)=>s+i.quantity,0)} total items &middot; ${items.length} line${items.length!==1?"s":""}</div></div>
 <div class="footer">Printed ${new Date().toLocaleString()}</div>
 </div>
-<script>window.onload=function(){try{JsBarcode("#order-bc","${orderNum}",{format:"CODE128",width:2.2,height:50,displayValue:false,margin:0});}catch(e){}${skuBcJs}window.print();};<\/script>
+<script>window.onload=function(){try{JsBarcode("#order-bc","${orderNum}",{format:"CODE128",width:2.2,height:50,displayValue:false,margin:0});}catch(e){console.warn("Barcode render failed:",e);}${skuBcJs}window.print();};<\/script>
 </body></html>`;
     openPrintWindow(html);
   }

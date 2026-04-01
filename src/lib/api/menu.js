@@ -3,11 +3,16 @@ import { db } from "../../config/firebase";
 import { writeAuditLog } from "./audit";
 
 export async function addMenuItem(data, actor = {}) {
-  const ref = await addDoc(collection(db, "kioskMenu"), {
-    ...data,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  let ref;
+  try {
+    ref = await addDoc(collection(db, "kioskMenu"), {
+      ...data,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    throw new Error(`Failed to add menu item: ${e.message}`);
+  }
   await writeAuditLog({
     action: "menu.created",
     actorId: actor.actorId,
@@ -23,7 +28,11 @@ export async function addMenuItem(data, actor = {}) {
 export async function updateMenuItem(id, data, actor = {}) {
   const ref = doc(db, "kioskMenu", id);
   const before = await getDoc(ref);
-  await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+  try {
+    await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+  } catch (e) {
+    throw new Error(`Failed to update menu item ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "menu.updated",
     actorId: actor.actorId,
@@ -39,7 +48,11 @@ export async function updateMenuItem(id, data, actor = {}) {
 export async function deleteMenuItem(id, actor = {}) {
   const ref = doc(db, "kioskMenu", id);
   const before = await getDoc(ref);
-  await deleteDoc(ref);
+  try {
+    await deleteDoc(ref);
+  } catch (e) {
+    throw new Error(`Failed to delete menu item ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "menu.deleted",
     actorId: actor.actorId,

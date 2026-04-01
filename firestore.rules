@@ -37,7 +37,7 @@ service cloud.firestore {
       allow delete: if isManager();
     }
 
-    // Admin accounts: authenticated read (login hash check), admin-only write
+    // Admin accounts: authenticated read (behind OperatorGate), admin-only write
     match /kioskAdmins/{docId} {
       allow read: if isSignedIn();
       allow write: if isManager();

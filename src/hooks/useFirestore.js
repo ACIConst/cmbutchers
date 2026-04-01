@@ -49,17 +49,21 @@ export function runSeeds() {
   }
 
   async function seedAdminsIfEmpty() {
-    const snap = await getDocs(collection(db, "kioskAdmins"));
-    if (!snap.empty) return;
-    const defaultPw = import.meta.env.VITE_DEFAULT_ADMIN_PW;
-    if (!defaultPw) { console.warn("Skipping admin seed: set VITE_DEFAULT_ADMIN_PW in .env"); return; }
-    await addDoc(collection(db, "kioskAdmins"), {
-      name: "Dev Admin",
-      username: "admin",
-      passwordHash: hashPassword(defaultPw),
-      role: "Super Admin",
-      createdAt: serverTimestamp(),
-    });
+    try {
+      const snap = await getDocs(collection(db, "kioskAdmins"));
+      if (!snap.empty) return;
+      const defaultPw = import.meta.env.VITE_DEFAULT_ADMIN_PW;
+      if (!defaultPw) { console.warn("Skipping admin seed: set VITE_DEFAULT_ADMIN_PW in .env"); return; }
+      await addDoc(collection(db, "kioskAdmins"), {
+        name: "Dev Admin",
+        username: "admin",
+        passwordHash: hashPassword(defaultPw),
+        role: "Super Admin",
+        createdAt: serverTimestamp(),
+      });
+    } catch (e) {
+      console.warn("Admin seed failed:", e);
+    }
   }
 
   runSeedOnce("menu", () => { const b = writeBatch(db); SEED_MENU.forEach(i => { b.set(doc(collection(db, "kioskMenu")), i); }); return b.commit(); });

@@ -50,7 +50,11 @@ export async function placeOrder({ orderData, menu, actor = {} }) {
     }
   }
 
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (e) {
+    throw new Error(`Failed to place order: ${e.message}`);
+  }
 
   await writeAuditLog({
     action: "order.placed",
@@ -68,7 +72,11 @@ export async function placeOrder({ orderData, menu, actor = {} }) {
 export async function updateOrder(id, data, actor = {}) {
   const ref = doc(db, "kioskOrders", id);
   const before = await getDoc(ref);
-  await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+  try {
+    await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+  } catch (e) {
+    throw new Error(`Failed to update order ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "order.updated",
     actorId: actor.actorId || "system",
@@ -100,7 +108,11 @@ export async function updateOrderStatus(id, nextStatus, actor = {}) {
     updatedAt: serverTimestamp(),
   };
   if (normalizedNext === "delivered") payload.deliveredAt = serverTimestamp();
-  await updateDoc(ref, payload);
+  try {
+    await updateDoc(ref, payload);
+  } catch (e) {
+    throw new Error(`Failed to update order status: ${e.message}`);
+  }
   await writeAuditLog({
     action: "order.status_updated",
     actorId: actor.actorId || "system",
@@ -118,7 +130,11 @@ export async function archiveOrder(id, actor = {}) {
   const snap = await getDoc(ref);
   if (!snap.exists()) return;
   const before = snap.data();
-  await updateDoc(ref, { archived: true, archivedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  try {
+    await updateDoc(ref, { archived: true, archivedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  } catch (e) {
+    throw new Error(`Failed to archive order ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "order.archived",
     actorId: actor.actorId || "system",
@@ -136,7 +152,11 @@ export async function restoreArchivedOrder(id, actor = {}) {
   const snap = await getDoc(ref);
   if (!snap.exists()) return;
   const before = snap.data();
-  await updateDoc(ref, { archived: false, archivedAt: null, updatedAt: serverTimestamp() });
+  try {
+    await updateDoc(ref, { archived: false, archivedAt: null, updatedAt: serverTimestamp() });
+  } catch (e) {
+    throw new Error(`Failed to restore order ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "order.restored",
     actorId: actor.actorId || "system",
@@ -159,7 +179,11 @@ export async function archiveAllActiveOrders(actor = {}) {
       count += 1;
       batch.update(d.ref, { archived: true, archivedAt: serverTimestamp(), updatedAt: serverTimestamp() });
     });
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (e) {
+    throw new Error(`Failed to archive orders: ${e.message}`);
+  }
   await writeAuditLog({
     action: "order.archive_all",
     actorId: actor.actorId || "system",

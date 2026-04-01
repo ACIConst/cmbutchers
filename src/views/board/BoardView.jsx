@@ -125,7 +125,7 @@ function OrderBoard({ orders, dbOps, onExit }) {
         o.start(ctx.currentTime + t);
         o.stop(ctx.currentTime + t + 0.3);
       });
-    } catch (e) { }
+    } catch (e) { console.warn("Audio notification failed:", e); }
   }
 
   // ── Status transitions ──
@@ -208,9 +208,9 @@ ${items.map((i, idx) => `  <div class="item">
 <div class="footer">Printed ${new Date().toLocaleString()}</div>
 <script>
   window.onload=function(){
-    try{JsBarcode("#order-bc","${orderNum}",{format:"CODE128",width:1.8,height:36,displayValue:false});}catch(e){}
-    try{QRCode.toCanvas(document.getElementById("order-qr"),"${orderNum}",{width:70,margin:1});}catch(e){}
-    ${items.map((i, idx) => (i.sku && !i.barcodeImage) ? `try{JsBarcode("#item-bc-${idx}","${i.sku}",{format:"CODE128",width:1.4,height:26,displayValue:false});}catch(e){}` : "").join("\n    ")}
+    try{JsBarcode("#order-bc","${orderNum}",{format:"CODE128",width:1.8,height:36,displayValue:false});}catch(e){console.warn("Barcode render failed:",e);}
+    try{QRCode.toCanvas(document.getElementById("order-qr"),"${orderNum}",{width:70,margin:1});}catch(e){console.warn("QR render failed:",e);}
+    ${items.map((i, idx) => (i.sku && !i.barcodeImage) ? `try{JsBarcode("#item-bc-${idx}","${i.sku}",{format:"CODE128",width:1.4,height:26,displayValue:false});}catch(e){console.warn("Barcode render failed:",e);}` : "").join("\n    ")}
     window.print();
   };
 <\/script>

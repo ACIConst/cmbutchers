@@ -3,12 +3,17 @@ import { db } from "../../config/firebase";
 import { writeAuditLog } from "./audit";
 
 export async function addUser(data, actor = {}) {
-  const ref = await addDoc(collection(db, "kioskUsers"), {
-    ...data,
-    email: data.email?.toLowerCase?.() || "",
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  let ref;
+  try {
+    ref = await addDoc(collection(db, "kioskUsers"), {
+      ...data,
+      email: data.email?.toLowerCase?.() || "",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    throw new Error(`Failed to add user: ${e.message}`);
+  }
   await writeAuditLog({
     action: "user.created",
     actorId: actor.actorId,
@@ -24,11 +29,15 @@ export async function addUser(data, actor = {}) {
 export async function updateUser(id, data, actor = {}) {
   const ref = doc(db, "kioskUsers", id);
   const before = await getDoc(ref);
-  await updateDoc(ref, {
-    ...data,
-    email: data.email?.toLowerCase?.() || data.email,
-    updatedAt: serverTimestamp(),
-  });
+  try {
+    await updateDoc(ref, {
+      ...data,
+      email: data.email?.toLowerCase?.() || data.email,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    throw new Error(`Failed to update user ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "user.updated",
     actorId: actor.actorId,
@@ -44,7 +53,11 @@ export async function updateUser(id, data, actor = {}) {
 export async function deleteUser(id, actor = {}) {
   const ref = doc(db, "kioskUsers", id);
   const before = await getDoc(ref);
-  await deleteDoc(ref);
+  try {
+    await deleteDoc(ref);
+  } catch (e) {
+    throw new Error(`Failed to delete user ${id}: ${e.message}`);
+  }
   await writeAuditLog({
     action: "user.deleted",
     actorId: actor.actorId,
