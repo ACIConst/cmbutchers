@@ -8,8 +8,8 @@ admin.initializeApp();
 const { authUri, callback, disconnect } = require("./quickbooks/auth");
 const { refreshToken } = require("./quickbooks/tokens");
 
-// Allow unauthenticated access — these are public HTTP endpoints
-const publicOpts = { invoker: "public" };
+// Allow unauthenticated access with CORS for browser requests
+const publicOpts = { invoker: "public", cors: true };
 
 // OAuth flow: redirects admin to QuickBooks authorization page
 exports.qbAuth = onRequest(publicOpts, authUri);
