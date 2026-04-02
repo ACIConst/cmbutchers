@@ -900,10 +900,10 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
   const [refreshing,setRefreshing]=useState(false);
   const QB_AUTH_URL="https://qbauth-osbc5z7m5a-uc.a.run.app";
   const QB_DISCONNECT_URL="https://qbdisconnect-osbc5z7m5a-uc.a.run.app";
-  const QB_TEST_URL="https://qbtestconnection-osbc5z7m5a-uc.a.run.app";
-  const QB_SYNC_URL="https://qbsyncproducts-osbc5z7m5a-uc.a.run.app";
-  const QB_IMPORT_URL="https://qbimportselected-osbc5z7m5a-uc.a.run.app";
-  const QB_REFRESH_URL="https://qbrefreshstock-osbc5z7m5a-uc.a.run.app";
+  const QB_TEST_URL="https://us-central1-testing-and-development-f696f.cloudfunctions.net/qbTestConnection";
+  const QB_SYNC_URL="https://us-central1-testing-and-development-f696f.cloudfunctions.net/qbSyncProducts";
+  const QB_IMPORT_URL="https://us-central1-testing-and-development-f696f.cloudfunctions.net/qbImportSelected";
+  const QB_REFRESH_URL="https://us-central1-testing-and-development-f696f.cloudfunctions.net/qbRefreshStock";
 
   useEffect(()=>{
     getDoc(doc(db,"kioskConfig","qbConnection")).then(snap=>{
