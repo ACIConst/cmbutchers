@@ -8,7 +8,7 @@ const { qbQuery, qbGet } = require("./api");
 async function fetchQBProducts(req, res) {
   try {
     const result = await qbQuery(
-      "SELECT * FROM Item WHERE Type IN ('Inventory', 'NonInventory', 'Service') MAXRESULTS 1000"
+      "SELECT * FROM Item WHERE Active = true MAXRESULTS 1000"
     );
 
     const items = result.QueryResponse?.Item || [];
