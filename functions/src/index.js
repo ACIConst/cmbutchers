@@ -1,5 +1,6 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 
 admin.initializeApp();
@@ -37,3 +38,7 @@ exports.qbRefreshStock = onRequest(publicOpts, refreshStock);
 // Order → Invoice: auto-create QB invoice when a kiosk order is placed
 const { onOrderCreated } = require("./quickbooks/sync-orders");
 exports.qbSyncOrder = onDocumentCreated("kioskOrders/{orderId}", onOrderCreated);
+
+// Scheduled auto-sync: refresh stock and prices from QB every 15 minutes
+const { autoRefreshStock } = require("./quickbooks/sync-inventory");
+exports.qbAutoSync = onSchedule("every 15 minutes", autoRefreshStock);

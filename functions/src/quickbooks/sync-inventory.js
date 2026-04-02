@@ -237,4 +237,73 @@ async function testConnection(req, res) {
   }
 }
 
-module.exports = { fetchQBProducts, importSelectedProducts, refreshStock, testConnection };
+/**
+ * Scheduled auto-sync: runs every 15 minutes to keep kiosk in sync with QB.
+ * Same logic as refreshStock but without HTTP req/res — runs as a Cloud Scheduler job.
+ */
+async function autoRefreshStock() {
+  const db = getFirestore();
+
+  // Check if QB is connected before trying to sync
+  const connDoc = await db.collection("kioskConfig").doc("qbConnection").get();
+  if (!connDoc.exists || !connDoc.data().connected) {
+    console.log("QB auto-sync skipped: not connected");
+    return;
+  }
+
+  const menuSnap = await db.collection("kioskMenu").where("qbItemId", "!=", "").get();
+  if (menuSnap.empty) {
+    console.log("QB auto-sync skipped: no linked items");
+    return;
+  }
+
+  const qbItemIds = menuSnap.docs.map((doc) => doc.data().qbItemId);
+  const chunks = [];
+  for (let i = 0; i < qbItemIds.length; i += 30) {
+    chunks.push(qbItemIds.slice(i, i + 30));
+  }
+
+  const qbItems = {};
+  for (const chunk of chunks) {
+    const idList = chunk.map((id) => `'${id}'`).join(", ");
+    const result = await qbQuery(`SELECT Id, QtyOnHand, UnitPrice, Name, Description FROM Item WHERE Id IN (${idList})`);
+    const items = result.QueryResponse?.Item || [];
+    for (const item of items) {
+      qbItems[item.Id] = item;
+    }
+  }
+
+  let updated = 0;
+  for (const doc of menuSnap.docs) {
+    const menuItem = doc.data();
+    const qbItem = qbItems[menuItem.qbItemId];
+    if (!qbItem) continue;
+
+    const newStock = qbItem.QtyOnHand ?? null;
+    const newInStock = newStock === null ? true : newStock > 0;
+    const newPrice = qbItem.UnitPrice || menuItem.price;
+    const newName = qbItem.Name || menuItem.name;
+
+    if (menuItem.stock !== newStock || menuItem.inStock !== newInStock || menuItem.price !== newPrice || menuItem.name !== newName) {
+      await doc.ref.update({
+        stock: newStock,
+        inStock: newInStock,
+        price: newPrice,
+        name: newName,
+        description: qbItem.Description || menuItem.description,
+        qbSyncedAt: Date.now(),
+        updatedAt: new Date(),
+      });
+      updated++;
+    }
+  }
+
+  // Update last sync timestamp
+  await db.collection("kioskConfig").doc("qbConnection").update({
+    lastSyncAt: Date.now(),
+  }).catch(() => {});
+
+  console.log(`QB auto-sync complete: ${updated} of ${menuSnap.size} items updated`);
+}
+
+module.exports = { fetchQBProducts, importSelectedProducts, refreshStock, testConnection, autoRefreshStock };
