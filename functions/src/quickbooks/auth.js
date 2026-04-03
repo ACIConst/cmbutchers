@@ -50,12 +50,11 @@ async function authUri(req, res) {
  */
 async function callback(req, res) {
   const oauthClient = createOAuthClient();
-  const db = getFirestore();
 
   try {
     // Verify CSRF token
     const stateParam = new URL(req.url, `https://${req.headers.host}`).searchParams.get("state");
-    const csrfDoc = await db.collection("qbTokens").doc("csrf").get();
+    const csrfDoc = await getFirestore().collection("qbTokens").doc("csrf").get();
 
     if (!csrfDoc.exists || csrfDoc.data().token !== stateParam || Date.now() > csrfDoc.data().expiresAt) {
       console.error("OAuth CSRF verification failed");
@@ -65,7 +64,7 @@ async function callback(req, res) {
     }
 
     // Clean up CSRF token (one-time use)
-    await db.collection("qbTokens").doc("csrf").delete().catch(() => {});
+    await getFirestore().collection("qbTokens").doc("csrf").delete().catch(() => {});
 
     const authResponse = await oauthClient.createToken(req.url);
     const tokens = authResponse.getJson();
@@ -74,8 +73,7 @@ async function callback(req, res) {
     const realmId = new URL(req.url, `https://${req.headers.host}`).searchParams.get("realmId") || tokens.realmId || "";
 
     // Store tokens encrypted in Firestore
-    const db = getFirestore();
-    await db.collection("qbTokens").doc("current").set({
+    await getFirestore().collection("qbTokens").doc("current").set({
       accessToken: encrypt(tokens.access_token),
       refreshToken: encrypt(tokens.refresh_token),
       realmId: realmId,
@@ -87,7 +85,7 @@ async function callback(req, res) {
     });
 
     // Write public connection status (no tokens!) so admin UI can show status
-    await db.collection("kioskConfig").doc("qbConnection").set({
+    await getFirestore().collection("kioskConfig").doc("qbConnection").set({
       connected: true,
       realmId: realmId,
       connectedAt: Date.now(),
