@@ -90,16 +90,20 @@ async function disconnect(req, res) {
 
   try {
     const doc = await db.collection("qbTokens").doc("current").get();
-    if (!doc.exists) {
-      res.status(400).json({ error: "No QuickBooks connection found" });
-      return;
+
+    // Try to revoke with QB, but don't block cleanup if it fails
+    if (doc.exists) {
+      try {
+        const plainToken = decrypt(doc.data().accessToken);
+        oauthClient.setToken({ access_token: plainToken });
+        await oauthClient.revoke({ access_token: plainToken });
+      } catch (revokeErr) {
+        console.warn("QB token revocation failed (continuing cleanup):", revokeErr.message);
+      }
     }
 
-    const plainToken = decrypt(doc.data().accessToken);
-    oauthClient.setToken({ access_token: plainToken });
-    await oauthClient.revoke({ access_token: plainToken });
-
-    await db.collection("qbTokens").doc("current").delete();
+    // Always clean up local state regardless of revocation result
+    await db.collection("qbTokens").doc("current").delete().catch(() => {});
     await db.collection("kioskConfig").doc("qbConnection").set({
       connected: false,
       disconnectedAt: Date.now(),
