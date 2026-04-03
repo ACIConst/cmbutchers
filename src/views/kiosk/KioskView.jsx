@@ -294,11 +294,28 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
       )}
 
       {view==="checkout"&&authMode==="choose"&&(
-        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:"clamp(12px, 3vw, 24px)",animation:"fadeUp .3s ease"}}>
-          <div style={{width:440,maxWidth:"95vw",textAlign:"center"}}>
-            <div style={{fontFamily:F.display,fontSize:"clamp(22px, 5vw, 30px)",fontWeight:900,color:C.cream,letterSpacing:2,marginBottom:8}}>CHECKOUT</div>
-            <div style={{fontSize:15,color:C.muted,marginBottom:8}}>Order total: <span style={{color:C.red,fontFamily:F.display,fontWeight:700,fontSize:22}}>${cartTotal.toFixed(2)}</span></div>
-            <div style={{fontSize:13,color:C.muted,marginBottom:32}}>Sign in to your account or create a new one to place your order</div>
+        <div style={{flex:1,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"clamp(12px, 3vw, 24px)",paddingTop:"clamp(20px, 5vw, 40px)",animation:"fadeUp .3s ease",overflowY:"auto"}}>
+          <div style={{width:480,maxWidth:"95vw"}}>
+            <div style={{textAlign:"center",marginBottom:24}}>
+              <div style={{fontFamily:F.display,fontSize:"clamp(24px, 5vw, 32px)",fontWeight:900,color:C.cream,letterSpacing:2,marginBottom:6}}>Thank You!</div>
+              <div style={{fontSize:14,color:C.muted}}>Here's your order summary</div>
+            </div>
+
+            <div style={{...GLASS_MODAL,borderRadius:16,padding:"16px 20px",marginBottom:20}}>
+              {cart.map((item,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:i<cart.length-1?"1px solid "+C.border:"none"}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:15,color:C.cream,fontWeight:600}}>{item.name}</div>
+                  <div style={{fontSize:12,color:C.muted,marginTop:2}}>Qty: {item.quantity} x ${(item.price||0).toFixed(2)}</div>
+                </div>
+                <div style={{fontFamily:F.display,fontSize:16,color:C.red,fontWeight:700}}>${((item.price||0)*item.quantity).toFixed(2)}</div>
+              </div>)}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:14,marginTop:4,borderTop:"2px solid "+C.border}}>
+                <div style={{fontFamily:F.display,fontSize:16,fontWeight:700,color:C.cream}}>Total</div>
+                <div style={{fontFamily:F.display,fontSize:24,fontWeight:900,color:C.red}}>${cartTotal.toFixed(2)}</div>
+              </div>
+            </div>
+
+            <div style={{fontSize:13,color:C.muted,textAlign:"center",marginBottom:20}}>Sign in to your account or create a new one to place your order</div>
             <div style={{display:"flex",flexDirection:"column",gap:14}}>
               <button onClick={()=>setAuthMode("login")} className="touch-active" style={{width:"100%",background:C.red,border:"none",color:C.cream,borderRadius:14,padding:"18px 20px",fontSize:18,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,boxShadow:"0 8px 32px "+C.redGlow,transition:"transform .15s"}}>Sign In</button>
               <button onClick={()=>setAuthMode("register")} className="touch-active" style={{width:"100%",background:"transparent",border:"2px solid "+C.borderMid,color:C.cream,borderRadius:14,padding:"18px 20px",fontSize:18,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,transition:"all .15s"}}>Create New Account</button>
