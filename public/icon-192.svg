@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="24" fill="#0f0d0b"/>
+  <text x="96" y="78" text-anchor="middle" font-family="Georgia, serif" font-size="42" font-weight="900" fill="#f5e6d3" letter-spacing="2">C</text>
+  <text x="96" y="118" text-anchor="middle" font-family="Georgia, serif" font-size="16" font-weight="700" fill="#9b1c1c" letter-spacing="3" text-transform="uppercase">MEATS</text>
+  <rect x="46" y="130" width="100" height="2" rx="1" fill="#9b1c1c" opacity="0.5"/>
+</svg>
