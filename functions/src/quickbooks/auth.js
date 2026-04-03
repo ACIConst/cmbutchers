@@ -27,11 +27,9 @@ function createOAuthClient() {
 async function authUri(req, res) {
   const oauthClient = createOAuthClient();
   const crypto = require("crypto");
-  const db = getFirestore();
-
   // Generate a random CSRF token and store it in Firestore (short-lived)
   const csrfToken = crypto.randomBytes(32).toString("hex");
-  await db.collection("qbTokens").doc("csrf").set({
+  await getFirestore().collection("qbTokens").doc("csrf").set({
     token: csrfToken,
     createdAt: Date.now(),
     expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
