@@ -176,7 +176,7 @@ async function sendInvoice(req, res) {
       : "https://sandbox-quickbooks.api.intuit.com/v3/company";
 
     const sendRes = await fetch(
-      `${baseUrl}/${realmId}/invoice/${order.qbInvoiceId}/send?sendTo=${encodeURIComponent(email)}`,
+      `${baseUrl}/${realmId}/invoice/${order.qbInvoiceId}/send?sendTo=${encodeURIComponent(email)}&minorversion=75`,
       {
         method: "POST",
         headers: {
