@@ -127,4 +127,48 @@ async function findOrCreateCustomer(db, order) {
   return { value: qbCustomerId };
 }
 
-module.exports = { onOrderCreated };
+/**
+ * Send an invoice via QuickBooks email.
+ * POST body: { orderId } — looks up the qbInvoiceId from the order doc.
+ * QB sends the invoice email to the customer's email on file.
+ */
+async function sendInvoice(req, res) {
+  const { orderId } = req.body;
+
+  if (!orderId) {
+    res.status(400).json({ error: "orderId required" });
+    return;
+  }
+
+  const db = getFirestore();
+
+  try {
+    const orderDoc = await db.collection("kioskOrders").doc(orderId).get();
+    if (!orderDoc.exists) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+
+    const order = orderDoc.data();
+    if (!order.qbInvoiceId) {
+      res.status(400).json({ error: "No QuickBooks invoice linked to this order" });
+      return;
+    }
+
+    // QB sends the invoice email to the customer's email on file
+    const result = await qbPost(`invoice/${order.qbInvoiceId}/send`, {});
+
+    // Mark as sent on the order
+    await orderDoc.ref.update({
+      qbInvoiceSent: true,
+      qbInvoiceSentAt: Date.now(),
+    });
+
+    res.json({ success: true, invoiceId: order.qbInvoiceId });
+  } catch (err) {
+    console.error("Send invoice error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+module.exports = { onOrderCreated, sendInvoice };

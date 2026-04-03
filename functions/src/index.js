@@ -47,3 +47,7 @@ exports.qbAutoSync = onSchedule("every 15 minutes", autoRefreshStock);
 const { verifyPassword, hashPassword } = require("./kiosk-auth");
 exports.kioskVerifyPassword = onRequest(publicOpts, verifyPassword);
 exports.kioskHashPassword = onRequest(publicOpts, hashPassword);
+
+// Send invoice via QuickBooks email
+const { sendInvoice } = require("./quickbooks/sync-orders");
+exports.qbSendInvoice = onRequest(publicOpts, sendInvoice);
