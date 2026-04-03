@@ -79,7 +79,7 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
   const [qty,setQty]=useState(1);
   const [view,setView]=useState("idle");
   // Auth state (replaces PIN)
-  const [authMode,setAuthMode]=useState("login"); // "login", "register", or "reset"
+  const [authMode,setAuthMode]=useState("choose"); // "choose", "login", "register", or "reset"
   const [authEmail,setAuthEmail]=useState("");
   const [authPass,setAuthPass]=useState("");
   const [authErr,setAuthErr]=useState("");
@@ -228,7 +228,7 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
     }finally{setResetLoading(false);}
   }
 
-  function resetAuth(){setAuthMode("login");setAuthEmail("");setAuthPass("");setAuthErr("");setRegFirst("");setRegLast("");setRegPhone("");setRegEmail("");setRegPass("");setRegLocation(DELIVERY_LOCATIONS[0]);setRegErr("");setResetEmail("");setResetPhone("");setResetNewPass("");setResetStep(1);setResetErr("");setResetUserId(null);setShowLoginPass(false);setShowRegPass(false);setShowResetPass(false);}
+  function resetAuth(){setAuthMode("choose");setAuthEmail("");setAuthPass("");setAuthErr("");setRegFirst("");setRegLast("");setRegPhone("");setRegEmail("");setRegPass("");setRegLocation(DELIVERY_LOCATIONS[0]);setRegErr("");setResetEmail("");setResetPhone("");setResetNewPass("");setResetStep(1);setResetErr("");setResetUserId(null);setShowLoginPass(false);setShowRegPass(false);setShowResetPass(false);}
   function reset(){setCart([]);resetAuth();setOrderResult(null);setView("idle");setActiveCat("All");setSelected(null);}
 
   if(view==="idle")return(
@@ -293,15 +293,24 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
         </div>
       )}
 
-      {view==="checkout"&&(
+      {view==="checkout"&&authMode==="choose"&&(
+        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:"clamp(12px, 3vw, 24px)",animation:"fadeUp .3s ease"}}>
+          <div style={{width:440,maxWidth:"95vw",textAlign:"center"}}>
+            <div style={{fontFamily:F.display,fontSize:"clamp(22px, 5vw, 30px)",fontWeight:900,color:C.cream,letterSpacing:2,marginBottom:8}}>CHECKOUT</div>
+            <div style={{fontSize:15,color:C.muted,marginBottom:8}}>Order total: <span style={{color:C.red,fontFamily:F.display,fontWeight:700,fontSize:22}}>${cartTotal.toFixed(2)}</span></div>
+            <div style={{fontSize:13,color:C.muted,marginBottom:32}}>Sign in to your account or create a new one to place your order</div>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              <button onClick={()=>setAuthMode("login")} className="touch-active" style={{width:"100%",background:C.red,border:"none",color:C.cream,borderRadius:14,padding:"18px 20px",fontSize:18,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,boxShadow:"0 8px 32px "+C.redGlow,transition:"transform .15s"}}>Sign In</button>
+              <button onClick={()=>setAuthMode("register")} className="touch-active" style={{width:"100%",background:"transparent",border:"2px solid "+C.borderMid,color:C.cream,borderRadius:14,padding:"18px 20px",fontSize:18,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,transition:"all .15s"}}>Create New Account</button>
+              <button onClick={()=>setView("cart")} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:14,marginTop:8}}>{"\u2190"} Back to Cart</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {view==="checkout"&&authMode!=="choose"&&(
         <div style={{flex:1,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"clamp(12px, 3vw, 24px)",paddingTop:"clamp(16px, 4vw, 30px)",animation:"fadeUp .3s ease",overflowY:"auto"}}>
           <div style={{...GLASS_MODAL,borderRadius:"clamp(16px, 3vw, 24px)",padding:"clamp(20px, 4vw, 36px) clamp(18px, 3.5vw, 36px)",width:440,maxWidth:"95vw",boxShadow:"0 28px 80px rgba(0,0,0,.75)"}}>
-
-            {/* Tab toggle */}
-            {authMode!=="reset"&&<div style={{display:"flex",gap:4,marginBottom:20,background:C.card,borderRadius:12,padding:4,border:"1px solid "+C.border}}>
-              <button onClick={()=>{setAuthMode("login");setRegErr("");}} style={{flex:1,background:authMode==="login"?C.red:"transparent",border:"none",color:authMode==="login"?C.cream:C.muted,borderRadius:9,padding:"10px 0",fontFamily:F.display,fontSize:14,fontWeight:700,cursor:"pointer",transition:"all .15s"}}>Sign In</button>
-              <button onClick={()=>{setAuthMode("register");setAuthErr("");}} style={{flex:1,background:authMode==="register"?C.red:"transparent",border:"none",color:authMode==="register"?C.cream:C.muted,borderRadius:9,padding:"10px 0",fontFamily:F.display,fontSize:14,fontWeight:700,cursor:"pointer",transition:"all .15s"}}>New Account</button>
-            </div>}
 
             {/* LOGIN FORM */}
             {authMode==="login"&&(
@@ -323,6 +332,9 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
                 <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <button onClick={()=>{setAuthMode("reset");setResetEmail(authEmail);setResetErr("");setResetStep(1);}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13,textDecoration:"underline",padding:0}}>Forgot password?</button>
                   <span style={{fontSize:13,color:C.border}}>Total: <span style={{color:C.muted,fontWeight:600}}>${cartTotal.toFixed(2)}</span></span>
+                </div>
+                <div style={{marginTop:14,textAlign:"center"}}>
+                  <button onClick={()=>{setAuthMode("choose");setAuthErr("");}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13}}>{"\u2190"} Back</button>
                 </div>
               </div>
             )}
@@ -394,6 +406,9 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
                 {regErr&&<div style={{background:C.errorBg,color:C.errorText,borderRadius:8,padding:"9px 14px",fontSize:13,marginBottom:12}}>{regErr}</div>}
                 <button onClick={handleRegister} disabled={regLoading} className="touch-active" style={{width:"100%",background:C.red,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,minHeight:52,boxShadow:"0 6px 28px "+C.redGlow,opacity:regLoading?.6:1}}>{regLoading?"Creating account...":"Create Account & Place Order"}</button>
                 <div style={{marginTop:12,fontSize:13,color:C.border,textAlign:"center"}}>Order total: <span style={{color:C.muted,fontWeight:600}}>${cartTotal.toFixed(2)}</span></div>
+                <div style={{marginTop:14,textAlign:"center"}}>
+                  <button onClick={()=>{setAuthMode("choose");setRegErr("");}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13}}>{"\u2190"} Back</button>
+                </div>
               </div>
             )}
           </div>
