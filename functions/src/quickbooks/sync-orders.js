@@ -155,8 +155,19 @@ async function sendInvoice(req, res) {
       return;
     }
 
-    // QB sends the invoice email to the customer's email on file
-    const result = await qbPost(`invoice/${order.qbInvoiceId}/send`, {});
+    // Get customer email from the order or kioskUsers
+    let email = order.email || "";
+    if (!email && order.userId) {
+      const userDoc = await db.collection("kioskUsers").doc(order.userId).get();
+      if (userDoc.exists) email = userDoc.data().email || "";
+    }
+    if (!email) {
+      res.status(400).json({ error: "No customer email found for this order" });
+      return;
+    }
+
+    // QB /send endpoint requires email as query parameter
+    const result = await qbPost(`invoice/${order.qbInvoiceId}/send?sendTo=${encodeURIComponent(email)}`, {});
 
     // Mark as sent on the order
     await orderDoc.ref.update({
