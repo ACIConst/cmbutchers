@@ -452,7 +452,9 @@ function CategoriesManager({ categories, menu, dbOps, showToast }) {const{T:C,TF
 // ═══════════════════════════════════════════════════════════════════════════════
 // User Manager
 // ═══════════════════════════════════════════════════════════════════════════════
-function UserManager({ users, dbOps, showToast, isMobile }) {const{T:C,TF:F}=useAdminTheme();
+function UserManager({ users: allUsers, dbOps, showToast, isMobile }) {const{T:C,TF:F}=useAdminTheme();
+  const ADMIN_ROLES=["super_admin","manager","Super Admin","Admin","Manager","Employee"];
+  const users=allUsers.filter(u=>!u.role||!ADMIN_ROLES.includes(u.role)||u.role==="Customer");
   const blank={firstName:"",lastName:"",email:"",phone:"",deliveryLocation:DELIVERY_LOCATIONS[0]};
   const [editing,setEditing]=useState(null);const [isNew,setIsNew]=useState(false);const [confirmDel,setConfirmDel]=useState(null);const [saving,setSaving]=useState(false);const [viewing,setViewing]=useState(null);
   function displayName(u){return((u.firstName||"")+" "+(u.lastName||"")).trim()||u.name||"Unnamed";}
