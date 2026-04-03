@@ -308,12 +308,36 @@ async function autoRefreshStock() {
     }
   }
 
+  // Check payment status on recent orders with QB invoices
+  let paidCount = 0;
+  const recentOrders = await db.collection("kioskOrders")
+    .where("qbInvoiceId", "!=", "")
+    .where("archived", "==", false)
+    .get();
+
+  for (const orderDoc of recentOrders.docs) {
+    const order = orderDoc.data();
+    if (order.qbPaid) continue; // Already marked as paid
+
+    try {
+      const invoiceData = await qbGet(`invoice/${order.qbInvoiceId}`);
+      const balance = invoiceData.Invoice?.Balance;
+
+      if (balance !== undefined && balance === 0) {
+        await orderDoc.ref.update({ qbPaid: true, qbPaidAt: Date.now() });
+        paidCount++;
+      }
+    } catch (e) {
+      // Skip if invoice read fails
+    }
+  }
+
   // Update last sync timestamp
   await db.collection("kioskConfig").doc("qbConnection").update({
     lastSyncAt: Date.now(),
   }).catch(() => {});
 
-  console.log(`QB auto-sync complete: ${updated} of ${menuSnap.size} items updated`);
+  console.log(`QB auto-sync complete: ${updated} items updated, ${paidCount} invoices marked paid`);
 }
 
 module.exports = { fetchQBProducts, importSelectedProducts, refreshStock, testConnection, autoRefreshStock };
