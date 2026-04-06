@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+    { "source": "/((?!assets/|sw\\.js|workbox-.*\\.js|robots\\.txt).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
