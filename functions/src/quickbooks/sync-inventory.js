@@ -29,7 +29,7 @@ async function fetchQBProducts(req, res) {
     res.json({ products, count: products.length });
   } catch (err) {
     console.error("QB fetch products error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Failed to fetch products from QuickBooks" });
   }
 }
 
@@ -148,7 +148,7 @@ async function importSelectedProducts(req, res) {
     res.json({ success: true, created, updated });
   } catch (err) {
     console.error("QB import products error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Failed to import products from QuickBooks" });
   }
 }
 
@@ -221,7 +221,7 @@ async function refreshStock(req, res) {
     res.json({ success: true, updated, total: menuSnap.size });
   } catch (err) {
     console.error("QB refresh stock error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Failed to refresh stock from QuickBooks" });
   }
 }
 
@@ -243,7 +243,7 @@ async function testConnection(req, res) {
     });
   } catch (err) {
     console.error("QB test connection error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Failed to connect to QuickBooks" });
   }
 }
 

@@ -76,7 +76,7 @@ async function callback(req, res) {
     await getFirestore().collection("qbTokens").doc("current").set({
       accessToken: encrypt(tokens.access_token),
       refreshToken: encrypt(tokens.refresh_token),
-      realmId: realmId,
+      realmId: encrypt(realmId),
       tokenType: tokens.token_type,
       expiresAt: Date.now() + tokens.expires_in * 1000,
       refreshExpiresAt: Date.now() + tokens.x_refresh_token_expires_in * 1000,

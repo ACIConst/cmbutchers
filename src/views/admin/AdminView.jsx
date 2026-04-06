@@ -14,7 +14,7 @@ import {
 } from "../../styles/tokens";
 import { AdminThemeProvider, useAdminTheme } from "../../context/AdminThemeContext";
 import {
-  useMenu, useUsers, useOrders, useCategories, useAdmins,
+  useMenu, useUsers, useOrders, useCategories,
   createDbOps, runSeeds,
 } from "../../hooks/useFirestore";
 import { useInventoryAdjustments } from "../../hooks/useInventoryAdjustments";
@@ -47,13 +47,17 @@ export default function AdminView() {
   const { users, ready: usersReady }         = useUsers();
   const { orders, ready: ordersReady }       = useOrders();
   const { categories, ready: catsReady }     = useCategories();
-  const { adminAccounts, ready: adminsReady } = useAdmins();
   const { adjustments, ready: adjustmentsReady } = useInventoryAdjustments();
   const { auditLogs, ready: auditReady } = useAuditLogs();
   const catNames = categories.map(c => c.name);
   const dbOps    = createDbOps(menu, categories);
   useEffect(() => { if (import.meta.env.DEV) runSeeds(); }, []);
-  const allReady = menuReady && usersReady && ordersReady && catsReady && adminsReady && adjustmentsReady && auditReady;
+  // Derive staff accounts from kioskUsers (roles that get admin panel access)
+  const STAFF_ROLES = ["Super Admin", "Manager", "Admin", "Employee", "manager", "super_admin"];
+  const adminAccounts = users
+    .filter(u => STAFF_ROLES.includes(u.role))
+    .map(u => ({ ...u, name: ((u.firstName || "") + " " + (u.lastName || "")).trim() || u.email || "Unknown" }));
+  const allReady = menuReady && usersReady && ordersReady && catsReady && adjustmentsReady && auditReady;
   if (!allReady) return <ModeLoadingScreen label="Loading Admin Panel..." />;
   return <AdminThemeProvider><AdminApp menu={menu} users={users} orders={orders} adminAccounts={adminAccounts} categories={categories} catNames={catNames} dbOps={dbOps} adjustments={adjustments} auditLogs={auditLogs} onExit={() => navigate("/")} /></AdminThemeProvider>;
 }

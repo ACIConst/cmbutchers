@@ -1,6 +1,6 @@
 import {
   collection, doc, getDoc, getDocs,
-  serverTimestamp, updateDoc, writeBatch,
+  serverTimestamp, updateDoc, writeBatch, runTransaction,
 } from "firebase/firestore";
 import { db } from "../../config/firebase";
 import { normalizeStatus, canTransition } from "../../styles/tokens";
@@ -13,21 +13,11 @@ function buildStatusHistory(order, newStatus, actorName = "system") {
 
 export async function placeOrder({ orderData, menu, actor = {} }) {
   const barcode = await generateOrderId();
-  const batch = writeBatch(db);
   const orderRef = doc(collection(db, "kioskOrders"));
   const actorName = actor.actorName || orderData.user || "customer";
 
-  batch.set(orderRef, {
-    ...orderData,
-    barcode,
-    orderNumber: barcode,
-    placedAt: serverTimestamp(),
-    archived: false,
-    status: "placed",
-    statusHistory: [{ status: "placed", at: new Date().toISOString(), by: actorName }],
-  });
-
-  // Decrement stock — bundles deduct from sub-items
+  // Build list of stock decrements needed (refs + quantities)
+  const stockOps = [];
   for (const item of orderData.items || []) {
     const menuItem = menu.find((m) => m.id === item.id);
     if (!menuItem) continue;
@@ -36,22 +26,41 @@ export async function placeOrder({ orderData, menu, actor = {} }) {
       for (const bi of menuItem.bundleItems) {
         const subItem = menu.find((m) => m.id === bi.itemId);
         if (!subItem || subItem.stock == null) continue;
-        const deduct = bi.quantity * item.quantity;
-        const newStock = Math.max(0, (subItem.stock || 0) - deduct);
-        const updates = { stock: newStock, updatedAt: serverTimestamp() };
-        if (newStock === 0) updates.inStock = false;
-        batch.update(doc(db, "kioskMenu", bi.itemId), updates);
+        stockOps.push({ ref: doc(db, "kioskMenu", bi.itemId), deduct: bi.quantity * item.quantity });
       }
     } else if (menuItem.stock != null) {
-      const newStock = Math.max(0, (menuItem.stock || 0) - item.quantity);
-      const updates = { stock: newStock, updatedAt: serverTimestamp() };
-      if (newStock === 0) updates.inStock = false;
-      batch.update(doc(db, "kioskMenu", item.id), updates);
+      stockOps.push({ ref: doc(db, "kioskMenu", item.id), deduct: item.quantity });
     }
   }
 
+  // Transaction: fresh-read stock, decrement atomically, create order
+  // Firestore retries automatically if a concurrent write changes any read doc
   try {
-    await batch.commit();
+    await runTransaction(db, async (transaction) => {
+      // Read all stock docs fresh inside the transaction
+      const freshSnaps = await Promise.all(stockOps.map((op) => transaction.get(op.ref)));
+
+      // Decrement stock from fresh values
+      freshSnaps.forEach((snap, i) => {
+        if (!snap.exists()) return;
+        const currentStock = snap.data().stock ?? 0;
+        const newStock = Math.max(0, currentStock - stockOps[i].deduct);
+        const updates = { stock: newStock, updatedAt: serverTimestamp() };
+        if (newStock === 0) updates.inStock = false;
+        transaction.update(stockOps[i].ref, updates);
+      });
+
+      // Create the order in the same transaction
+      transaction.set(orderRef, {
+        ...orderData,
+        barcode,
+        orderNumber: barcode,
+        placedAt: serverTimestamp(),
+        archived: false,
+        status: "placed",
+        statusHistory: [{ status: "placed", at: new Date().toISOString(), by: actorName }],
+      });
+    });
   } catch (e) {
     throw new Error(`Failed to place order: ${e.message}`);
   }

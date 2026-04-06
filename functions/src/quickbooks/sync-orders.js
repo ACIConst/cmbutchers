@@ -66,7 +66,7 @@ async function onOrderCreated(event) {
 
     // Store error on the order so admin can see it
     await db.collection("kioskOrders").doc(orderId).update({
-      qbSyncError: err.message,
+      qbSyncError: err.statusCode ? `QuickBooks API error (${err.statusCode})` : "Sync failed",
       qbSyncAttemptedAt: Date.now(),
     }).catch(() => {});
   }
@@ -80,14 +80,26 @@ async function findOrCreateCustomer(db, order) {
   const email = order.email || "";
   const name = order.user || "Kiosk Customer";
 
-  // Try to find existing customer by email
+  // Fast path: use stored QB customer ID from a previous order (skips query entirely)
+  if (order.userId) {
+    const userDoc = await db.collection("kioskUsers").doc(order.userId).get();
+    if (userDoc.exists && userDoc.data().qbCustomerId) {
+      return { value: userDoc.data().qbCustomerId };
+    }
+  }
+
+  // Fallback: find customer by email in QB
   if (email) {
-    const result = await qbQuery(
-      `SELECT Id, DisplayName FROM Customer WHERE PrimaryEmailAddr = '${email.replace(/'/g, "\\'")}'`
-    );
-    const customers = result.QueryResponse?.Customer || [];
-    if (customers.length > 0) {
-      return { value: customers[0].Id };
+    // Sanitize email: strip anything that isn't a valid email character to prevent QB query injection
+    const safeEmail = email.replace(/[^a-zA-Z0-9@._+\-]/g, "");
+    if (safeEmail && safeEmail === email) {
+      const result = await qbQuery(
+        `SELECT Id, DisplayName FROM Customer WHERE PrimaryEmailAddr = '${safeEmail}'`
+      );
+      const customers = result.QueryResponse?.Customer || [];
+      if (customers.length > 0) {
+        return { value: customers[0].Id };
+      }
     }
   }
 
@@ -204,7 +216,7 @@ async function sendInvoice(req, res) {
     res.json({ success: true, invoiceId: order.qbInvoiceId });
   } catch (err) {
     console.error("Send invoice error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Failed to send invoice" });
   }
 }
 

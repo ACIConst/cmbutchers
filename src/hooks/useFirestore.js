@@ -7,7 +7,7 @@ import {
   orderBy, limit,
   serverTimestamp,
 } from "firebase/firestore";
-import { db, CF_BASE } from "../config/firebase";
+import { db, auth, CF_BASE } from "../config/firebase";
 
 // ─── Resilient Firestore listener with auto-reconnect ────────────────────────
 // Handles: listener errors, iPad sleep/wake, background tab throttling
@@ -104,28 +104,10 @@ export function runSeeds() {
     }
   }
 
-  async function seedAdminsIfEmpty() {
-    try {
-      const snap = await getDocs(collection(db, "kioskAdmins"));
-      if (!snap.empty) return;
-      const defaultPw = import.meta.env.VITE_DEFAULT_ADMIN_PW;
-      if (!defaultPw) { console.warn("Skipping admin seed: set VITE_DEFAULT_ADMIN_PW in .env"); return; }
-      await addDoc(collection(db, "kioskAdmins"), {
-        name: "Dev Admin",
-        username: "admin",
-        passwordHash: hashPassword(defaultPw),
-        role: "Super Admin",
-        createdAt: serverTimestamp(),
-      });
-    } catch (e) {
-      console.warn("Admin seed failed:", e);
-    }
-  }
 
   runSeedOnce("menu", () => { const b = writeBatch(db); SEED_MENU.forEach(i => { b.set(doc(collection(db, "kioskMenu")), i); }); return b.commit(); });
   runSeedOnce("users", () => { const b = writeBatch(db); SEED_USERS.forEach(i => { b.set(doc(collection(db, "kioskUsers")), i); }); return b.commit(); });
   runSeedOnce("categories", () => { const b = writeBatch(db); SEED_CATEGORIES.forEach(i => { b.set(doc(collection(db, "kioskCategories")), i); }); return b.commit(); });
-  runSeedOnce("admins", () => seedAdminsIfEmpty());
 }
 
 // ─── Shared hooks ─────────────────────────────────────────────────────────────
@@ -159,12 +141,6 @@ export function useCategories() {
   return { categories, ready };
 }
 
-const adminsQuery = collection(db, "kioskAdmins");
-const adminsMap = d => ({ id: d.id, ...d.data() });
-export function useAdmins() {
-  const { data: adminAccounts, ready } = useResilientSnapshot(adminsQuery, adminsMap);
-  return { adminAccounts, ready };
-}
 
 // ─── Order ID generation (re-exported from API layer) ────────────────────────
 export { generateOrderId } from "../lib/api/orderIds";
@@ -188,23 +164,42 @@ export function createDbOps(menu, categories) {
   const _deleteOrder = (id) => archiveOrder(id);
   const _clearOrders = () => archiveAllActiveOrders();
 
-  // Admin accounts — bcrypt hashing via Cloud Function
-  const HASH_URL = `${CF_BASE}/kioskHashPassword`;
+  // Staff accounts — Cloud Functions handle Firebase Auth + kioskUsers atomically
+  const getToken = async () => {
+    const user = auth.currentUser;
+    return user ? user.getIdToken() : null;
+  };
+  const staffHeaders = async () => ({
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${await getToken()}`,
+  });
   const addAdminAccount = async (data) => {
-    const res = await fetch(HASH_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: data.password }) });
-    const { hash } = await res.json();
-    return addDoc(collection(db, "kioskAdmins"), { ...data, passwordHash: hash, createdAt: serverTimestamp() });
+    const res = await fetch(`${CF_BASE}/kioskCreateStaff`, {
+      method: "POST", headers: await staffHeaders(),
+      body: JSON.stringify({ name: data.name, email: data.email, password: data.password, role: data.role }),
+    });
+    const result = await res.json();
+    if (!result.success) throw new Error(result.error || "Failed to create staff");
+    return result;
   };
   const updateAdminAccount = async (id, data) => {
-    const updates = { name: data.name, username: data.username, role: data.role };
-    if (data.password && data.password.length >= 6) {
-      const res = await fetch(HASH_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: data.password }) });
-      const { hash } = await res.json();
-      updates.passwordHash = hash;
-    }
-    return updateDoc(doc(db, "kioskAdmins", id), updates);
+    const res = await fetch(`${CF_BASE}/kioskUpdateStaff`, {
+      method: "POST", headers: await staffHeaders(),
+      body: JSON.stringify({ uid: id, name: data.name, email: data.email, role: data.role, password: data.password || undefined }),
+    });
+    const result = await res.json();
+    if (!result.success) throw new Error(result.error || "Failed to update staff");
+    return result;
   };
-  const deleteAdminAccount = id => deleteDoc(doc(db, "kioskAdmins", id));
+  const deleteAdminAccount = async (id) => {
+    const res = await fetch(`${CF_BASE}/kioskDeleteStaff`, {
+      method: "POST", headers: await staffHeaders(),
+      body: JSON.stringify({ uid: id }),
+    });
+    const result = await res.json();
+    if (!result.success) throw new Error(result.error || "Failed to delete staff");
+    return result;
+  };
 
   // Categories — delegates to audit-logged API
   const _addCategory = async (name) => {

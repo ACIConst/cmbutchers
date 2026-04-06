@@ -1,12 +1,16 @@
 const bcrypt = require("bcrypt");
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getAuth } = require("firebase-admin/auth");
 
 const BCRYPT_ROUNDS = 12;
+const ADMIN_ROLES = ["Super Admin", "manager", "super_admin"];
+const VALID_STAFF_ROLES = ["Employee", "Manager", "Admin", "Super Admin"];
+const MAX_STAFF_OPS_PER_IP = 10;
 
 // --- Rate limiting (in-memory, per Cloud Function instance) ---
 const RATE_WINDOW_MS = 60 * 1000; // 1 minute
 const MAX_VERIFY_PER_IP = 10;     // 10 login attempts per minute
-const MAX_HASH_PER_IP = 5;        // 5 registrations per minute
+const MAX_HASH_PER_IP = 15;       // 15 registrations per minute
 const rateCounts = {};
 
 function isRateLimited(ip, limit) {
@@ -119,8 +123,8 @@ async function hashPassword(req, res) {
 
   const { password } = req.body;
 
-  if (!password || password.length < 4) {
-    res.status(400).json({ error: "Password must be at least 4 characters" });
+  if (!password || password.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters" });
     return;
   }
 
@@ -128,4 +132,214 @@ async function hashPassword(req, res) {
   res.json({ hash });
 }
 
-module.exports = { verifyPassword, hashPassword };
+// ─── Staff management (Firebase Auth + kioskUsers) ──────────────────────────
+
+/**
+ * Verify the caller is an authenticated admin.
+ * Extracts Bearer token, verifies it, and checks kioskUsers role.
+ * Returns { uid, role } or throws.
+ */
+async function verifyCallerIsAdmin(req) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    throw { status: 401, message: "Authentication required" };
+  }
+  const token = authHeader.split("Bearer ")[1];
+  const decoded = await getAuth().verifyIdToken(token);
+  const db = getFirestore();
+  const userDoc = await db.collection("kioskUsers").doc(decoded.uid).get();
+  if (!userDoc.exists) {
+    throw { status: 403, message: "No admin profile found" };
+  }
+  const role = userDoc.data().role;
+  if (!ADMIN_ROLES.includes(role)) {
+    throw { status: 403, message: "Insufficient permissions" };
+  }
+  return { uid: decoded.uid, role };
+}
+
+function sendError(res, err) {
+  const status = err.status || 500;
+  const message = err.message || "Internal error";
+  res.status(status).json({ success: false, error: message });
+}
+
+/**
+ * Create a staff member: Firebase Auth account + kioskUsers doc.
+ * POST body: { name, email, password, role }
+ * Requires: caller must be admin (Super Admin to assign Super Admin role).
+ */
+async function createStaff(req, res) {
+  const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+  if (isRateLimited(ip, MAX_STAFF_OPS_PER_IP)) {
+    res.status(429).json({ success: false, error: "Too many requests. Please wait." });
+    return;
+  }
+  let caller;
+  try { caller = await verifyCallerIsAdmin(req); }
+  catch (e) { return sendError(res, e); }
+
+  const { name, email, password, role } = req.body;
+  if (!name || !email || !password || !role) {
+    return sendError(res, { status: 400, message: "Name, email, password, and role are required" });
+  }
+  if (password.length < 8) {
+    return sendError(res, { status: 400, message: "Password must be at least 8 characters" });
+  }
+  if (!VALID_STAFF_ROLES.includes(role)) {
+    return sendError(res, { status: 400, message: "Invalid role" });
+  }
+  if (role === "Super Admin" && caller.role !== "Super Admin") {
+    return sendError(res, { status: 403, message: "Only Super Admins can assign Super Admin role" });
+  }
+
+  const trimmedEmail = email.toLowerCase().trim();
+  const nameParts = name.trim().split(/\s+/);
+  const firstName = nameParts[0] || "";
+  const lastName = nameParts.slice(1).join(" ") || "";
+
+  let authUser;
+  try {
+    authUser = await getAuth().createUser({
+      email: trimmedEmail,
+      password,
+      displayName: name.trim(),
+    });
+  } catch (e) {
+    if (e.code === "auth/email-already-exists") {
+      return sendError(res, { status: 409, message: "An account with this email already exists" });
+    }
+    console.error("Firebase Auth createUser failed:", e);
+    return sendError(res, { status: 500, message: "Failed to create account" });
+  }
+
+  // Write kioskUsers doc keyed by Auth UID (required for Firestore security rules)
+  try {
+    const db = getFirestore();
+    await db.collection("kioskUsers").doc(authUser.uid).set({
+      firstName,
+      lastName,
+      email: trimmedEmail,
+      role,
+      phone: "",
+      createdAt: FieldValue.serverTimestamp(),
+      createdBy: caller.uid,
+    });
+  } catch (e) {
+    // Rollback: delete the orphaned Firebase Auth account
+    console.error("Firestore write failed, rolling back Auth account:", e);
+    await getAuth().deleteUser(authUser.uid).catch(() => {});
+    return sendError(res, { status: 500, message: "Failed to save staff profile" });
+  }
+
+  res.json({ success: true, uid: authUser.uid });
+}
+
+/**
+ * Update a staff member: Firebase Auth + kioskUsers doc.
+ * POST body: { uid, name, email, role, password? }
+ */
+async function updateStaff(req, res) {
+  const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+  if (isRateLimited(ip, MAX_STAFF_OPS_PER_IP)) {
+    res.status(429).json({ success: false, error: "Too many requests. Please wait." });
+    return;
+  }
+  let caller;
+  try { caller = await verifyCallerIsAdmin(req); }
+  catch (e) { return sendError(res, e); }
+
+  const { uid, name, email, role, password } = req.body;
+  if (!uid || !name || !email || !role) {
+    return sendError(res, { status: 400, message: "uid, name, email, and role are required" });
+  }
+  if (!VALID_STAFF_ROLES.includes(role)) {
+    return sendError(res, { status: 400, message: "Invalid role" });
+  }
+  if (role === "Super Admin" && caller.role !== "Super Admin") {
+    return sendError(res, { status: 403, message: "Only Super Admins can assign Super Admin role" });
+  }
+  if (password && password.length < 8) {
+    return sendError(res, { status: 400, message: "Password must be at least 8 characters" });
+  }
+
+  const trimmedEmail = email.toLowerCase().trim();
+  const nameParts = name.trim().split(/\s+/);
+  const firstName = nameParts[0] || "";
+  const lastName = nameParts.slice(1).join(" ") || "";
+
+  // Update Firebase Auth
+  const authUpdates = { displayName: name.trim(), email: trimmedEmail };
+  if (password) authUpdates.password = password;
+  try {
+    await getAuth().updateUser(uid, authUpdates);
+  } catch (e) {
+    console.error("Firebase Auth updateUser failed:", e);
+    return sendError(res, { status: 500, message: "Failed to update account: " + e.message });
+  }
+
+  // Update kioskUsers doc
+  try {
+    const db = getFirestore();
+    await db.collection("kioskUsers").doc(uid).update({
+      firstName,
+      lastName,
+      email: trimmedEmail,
+      role,
+    });
+  } catch (e) {
+    console.error("Firestore update failed:", e);
+    return sendError(res, { status: 500, message: "Account updated but profile save failed" });
+  }
+
+  res.json({ success: true });
+}
+
+/**
+ * Delete a staff member: Firebase Auth + kioskUsers doc.
+ * POST body: { uid }
+ */
+async function deleteStaff(req, res) {
+  const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+  if (isRateLimited(ip, MAX_STAFF_OPS_PER_IP)) {
+    res.status(429).json({ success: false, error: "Too many requests. Please wait." });
+    return;
+  }
+  let caller;
+  try { caller = await verifyCallerIsAdmin(req); }
+  catch (e) { return sendError(res, e); }
+
+  const { uid } = req.body;
+  if (!uid) {
+    return sendError(res, { status: 400, message: "uid is required" });
+  }
+  if (uid === caller.uid) {
+    return sendError(res, { status: 400, message: "Cannot delete your own account" });
+  }
+
+  // Check target's role — only Super Admins can delete other Super Admins
+  const db = getFirestore();
+  const targetDoc = await db.collection("kioskUsers").doc(uid).get();
+  if (targetDoc.exists && targetDoc.data().role === "Super Admin" && caller.role !== "Super Admin") {
+    return sendError(res, { status: 403, message: "Only Super Admins can remove other Super Admins" });
+  }
+
+  try {
+    await getAuth().deleteUser(uid);
+  } catch (e) {
+    if (e.code !== "auth/user-not-found") {
+      console.error("Firebase Auth deleteUser failed:", e);
+      return sendError(res, { status: 500, message: "Failed to delete account" });
+    }
+  }
+
+  try {
+    await db.collection("kioskUsers").doc(uid).delete();
+  } catch (e) {
+    console.error("Firestore delete failed:", e);
+  }
+
+  res.json({ success: true });
+}
+
+module.exports = { verifyPassword, hashPassword, createStaff, updateStaff, deleteStaff };

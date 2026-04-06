@@ -87,10 +87,10 @@ async function getValidToken() {
       updatedAt: Date.now(),
     });
 
-    return { accessToken: tokens.access_token, realmId: stored.realmId };
+    return { accessToken: tokens.access_token, realmId: decrypt(stored.realmId) };
   }
 
-  return { accessToken: decrypt(stored.accessToken), realmId: stored.realmId };
+  return { accessToken: decrypt(stored.accessToken), realmId: decrypt(stored.realmId) };
 }
 
 module.exports = { refreshToken, getValidToken };

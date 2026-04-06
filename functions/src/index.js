@@ -17,14 +17,14 @@ const allowedOrigins = [
   "http://localhost:5174",
 ];
 const publicOpts = { invoker: "public", cors: allowedOrigins };
-// OAuth/webhook endpoints need open CORS (redirects from QuickBooks)
-const openOpts = { invoker: "public", cors: true };
+// Webhook needs open CORS (QB servers POST to it from any origin)
+const webhookOpts = { invoker: "public", cors: true };
 
-// OAuth flow: redirects through QuickBooks, needs open CORS
-exports.qbAuth = onRequest(openOpts, authUri);
+// OAuth flow: browser redirects (not XHR), restricted CORS is fine
+exports.qbAuth = onRequest(publicOpts, authUri);
 
 // OAuth callback: QuickBooks redirects here after admin approves
-exports.qbCallback = onRequest(openOpts, callback);
+exports.qbCallback = onRequest(publicOpts, callback);
 
 // Disconnect: revokes tokens and cleans up
 exports.qbDisconnect = onRequest(publicOpts, disconnect);
@@ -34,7 +34,7 @@ exports.qbRefreshToken = onRequest(publicOpts, refreshToken);
 
 // Webhook: receives notifications from QuickBooks servers, needs open CORS
 const { handleWebhook } = require("./quickbooks/webhooks");
-exports.qbWebhook = onRequest(openOpts, handleWebhook);
+exports.qbWebhook = onRequest(webhookOpts, handleWebhook);
 
 // Inventory sync: fetch QB products, import selected, refresh stock
 const { fetchQBProducts, importSelectedProducts, refreshStock, testConnection } = require("./quickbooks/sync-inventory");
@@ -52,9 +52,14 @@ const { autoRefreshStock } = require("./quickbooks/sync-inventory");
 exports.qbAutoSync = onSchedule("every 15 minutes", autoRefreshStock);
 
 // Kiosk auth: server-side password verification and hashing (bcrypt)
-const { verifyPassword, hashPassword } = require("./kiosk-auth");
+const { verifyPassword, hashPassword, createStaff, updateStaff, deleteStaff } = require("./kiosk-auth");
 exports.kioskVerifyPassword = onRequest(publicOpts, verifyPassword);
 exports.kioskHashPassword = onRequest(publicOpts, hashPassword);
+
+// Staff management: creates Firebase Auth account + kioskUsers doc in one step
+exports.kioskCreateStaff = onRequest(publicOpts, createStaff);
+exports.kioskUpdateStaff = onRequest(publicOpts, updateStaff);
+exports.kioskDeleteStaff = onRequest(publicOpts, deleteStaff);
 
 // Send invoice via QuickBooks email
 const { sendInvoice } = require("./quickbooks/sync-orders");

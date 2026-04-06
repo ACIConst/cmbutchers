@@ -28,9 +28,32 @@ export function SettingsPanel({ showToast, adminAccounts, dbOps, currentAdmin, i
   );
 }
 
+function compressImage(file, maxWidth = 280) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      // Try WebP first, fall back to PNG
+      const webpUrl = canvas.toDataURL("image/webp", 0.85);
+      const ext = webpUrl.startsWith("data:image/webp") ? "webp" : "png";
+      const quality = ext === "webp" ? 0.85 : undefined;
+      canvas.toBlob(blob => blob ? resolve({ blob, ext }) : reject(new Error("Compression failed")), "image/" + ext, quality);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => { URL.revokeObjectURL(img.src); reject(new Error("Failed to load image")); };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 function SettingsAppearance({C,F,theme,setTheme,fontId,setFontId,logoUrl,setLogoUrl,showToast,cardSt,secTitle}){
   const [uploading,setUploading]=useState(false);const fileRef=useRef(null);
-  async function handleLogoUpload(e){const file=e.target.files?.[0];if(!file)return;if(!file.type.startsWith("image/")){showToast("Please select an image file","error");return;}if(file.size>2*1024*1024){showToast("Logo must be under 2 MB","error");return;}setUploading(true);try{const storageRef=ref(storage,"company-config/logo-"+Date.now());await uploadBytes(storageRef,file);const url=await getDownloadURL(storageRef);await setLogoUrl(url);showToast("Logo uploaded");}catch(err){console.error(err);showToast("Upload failed","error");}finally{setUploading(false);if(fileRef.current)fileRef.current.value="";}}
+  async function handleLogoUpload(e){const file=e.target.files?.[0];if(!file)return;if(!file.type.startsWith("image/")){showToast("Please select an image file","error");return;}if(file.size>2*1024*1024){showToast("Logo must be under 2 MB","error");return;}setUploading(true);try{const{blob,ext}=await compressImage(file);const storageRef=ref(storage,"company-config/logo-"+Date.now()+"."+ext);await uploadBytes(storageRef,blob);const url=await getDownloadURL(storageRef);await setLogoUrl(url);showToast("Logo uploaded");}catch(err){console.error(err);showToast("Upload failed","error");}finally{setUploading(false);if(fileRef.current)fileRef.current.value="";}}
   return(
     <div style={{maxWidth:560}}>
       <div style={cardSt}>
@@ -53,14 +76,15 @@ function SettingsAppearance({C,F,theme,setTheme,fontId,setFontId,logoUrl,setLogo
 }
 
 function SettingsStaff({C,F,adminAccounts,dbOps,currentAdmin,isSuperAdmin,showToast,cardSt,secTitle}){
-  const blank={name:"",username:"",password:"",role:"Admin"};
+  const blank={name:"",email:"",password:"",role:"Admin"};
   const [editing,setEditing]=useState(null);const [isNew,setIsNew]=useState(false);const [confirmDel,setConfirmDel]=useState(null);const [saving,setSaving]=useState(false);
   const ROLES=isSuperAdmin?["Employee","Manager","Admin","Super Admin"]:["Employee","Manager","Admin"];
-  async function saveStaff(staff){if(saving)return;if(!staff.name.trim()||!staff.username.trim()){showToast("Name and username required","error");return;}if(isNew&&staff.password.length<6){showToast("Password must be at least 6 characters","error");return;}const taken=adminAccounts.find(a=>a.username.toLowerCase()===staff.username.trim().toLowerCase()&&a.id!==staff.id);if(taken){showToast("Username already taken","error");return;}if(!isSuperAdmin&&staff.role==="Super Admin"){showToast("Only Super Admins can assign that role","error");return;}setSaving(true);try{if(isNew){await dbOps.addAdminAccount({...staff,role:staff.role});showToast("Staff member added");}else{await dbOps.updateAdminAccount(staff.id,staff);showToast("Staff member updated");}setEditing(null);}catch(e){console.error(e);showToast("Failed","error");}finally{setSaving(false);}}
-  async function deleteStaff(id){if(id===currentAdmin?.id){showToast("Cannot delete your own account","error");setConfirmDel(null);return;}const target=adminAccounts.find(a=>a.id===id);if(!isSuperAdmin&&target?.role==="Super Admin"){showToast("Cannot remove a Super Admin","error");setConfirmDel(null);return;}try{await dbOps.deleteAdminAccount(id);showToast("Staff member removed","error");setConfirmDel(null);}catch(e){console.error(e);showToast("Failed","error");}}
+  const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  async function saveStaff(staff){if(saving)return;if(!staff.name.trim()||!staff.email.trim()){showToast("Name and email required","error");return;}if(!emailRe.test(staff.email.trim())){showToast("Enter a valid email address","error");return;}if(isNew&&staff.password.length<8){showToast("Password must be at least 8 characters","error");return;}if(!isNew&&staff.password&&staff.password.length<8){showToast("Password must be at least 8 characters","error");return;}const taken=adminAccounts.find(a=>a.email&&a.email.toLowerCase()===staff.email.trim().toLowerCase()&&a.id!==staff.id);if(taken){showToast("Email already in use","error");return;}if(!isSuperAdmin&&staff.role==="Super Admin"){showToast("Only Super Admins can assign that role","error");return;}setSaving(true);try{if(isNew){await dbOps.addAdminAccount(staff);showToast("Staff member added");}else{await dbOps.updateAdminAccount(staff.id,staff);showToast("Staff member updated");}setEditing(null);}catch(e){console.error(e);showToast(e.message||"Failed","error");}finally{setSaving(false);}}
+  async function deleteStaff(id){if(id===currentAdmin?.id){showToast("Cannot delete your own account","error");setConfirmDel(null);return;}const target=adminAccounts.find(a=>a.id===id);if(!isSuperAdmin&&target?.role==="Super Admin"){showToast("Cannot remove a Super Admin","error");setConfirmDel(null);return;}try{await dbOps.deleteAdminAccount(id);showToast("Staff member removed");setConfirmDel(null);}catch(e){console.error(e);showToast(e.message||"Failed","error");}}
   const rc={"Super Admin":{bg:C.red,text:"#fff"},"Admin":{bg:C.amber,text:C.amberText},"Manager":{bg:"#1e40af",text:"#93c5fd"},"Employee":{bg:C.surface,text:C.muted}};
   return(
-    <div style={{maxWidth:640}}>
+    <div style={{maxWidth:700}}>
       <div style={cardSt}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
           <div style={secTitle}>Staff Accounts ({adminAccounts.length})</div>
@@ -68,12 +92,12 @@ function SettingsStaff({C,F,adminAccounts,dbOps,currentAdmin,isSuperAdmin,showTo
         </div>
         <div style={{fontSize:12,color:C.muted,marginBottom:16}}>Staff accounts can sign into the admin panel. Role determines what they can access.</div>
         <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:12,overflow:"hidden"}}>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 120px 140px 100px",borderBottom:"1px solid "+C.border,padding:"9px 16px"}}>{["Name","Role","Username",""].map(h=><div key={h||"act"} style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:C.muted}}>{h}</div>)}</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 120px 1fr 100px",borderBottom:"1px solid "+C.border,padding:"9px 16px"}}>{["Name","Role","Email",""].map(h=><div key={h||"act"} style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:C.muted}}>{h}</div>)}</div>
           {adminAccounts.length===0?<div style={{padding:"30px",textAlign:"center",color:C.muted}}>No staff accounts</div>:adminAccounts.map(staff=>{const isMe=staff.id===currentAdmin?.id;const isSA=staff.role==="Super Admin";const canEdit=isSuperAdmin||!isSA;const col=rc[staff.role]||rc["Employee"];return(
-            <div key={staff.id} className="row-hover" style={{display:"grid",gridTemplateColumns:"1fr 120px 140px 100px",borderBottom:"1px solid "+C.border,padding:"12px 16px",alignItems:"center",transition:"background .15s"}}>
-              <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:30,height:30,borderRadius:"50%",background:C.red,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:"#fff",flexShrink:0}}>{staff.name.charAt(0).toUpperCase()}</div><div><div style={{fontSize:14,color:C.cream,fontWeight:600}}>{staff.name}{isMe&&<span style={{fontSize:11,color:C.muted,marginLeft:6}}>(you)</span>}</div></div></div>
+            <div key={staff.id} className="row-hover" style={{display:"grid",gridTemplateColumns:"1fr 120px 1fr 100px",borderBottom:"1px solid "+C.border,padding:"12px 16px",alignItems:"center",transition:"background .15s"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:30,height:30,borderRadius:"50%",background:C.red,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:"#fff",flexShrink:0}}>{(staff.name||"?").charAt(0).toUpperCase()}</div><div><div style={{fontSize:14,color:C.cream,fontWeight:600}}>{staff.name}{isMe&&<span style={{fontSize:11,color:C.muted,marginLeft:6}}>(you)</span>}</div></div></div>
               <div><span style={{background:col.bg,color:col.text,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700}}>{staff.role}</span></div>
-              <div style={{fontFamily:F.mono,fontSize:13,color:C.mutedLight}}>{staff.username}</div>
+              <div style={{fontSize:13,color:C.mutedLight,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{staff.email||"—"}</div>
               <div style={{display:"flex",gap:6}}>{canEdit&&<button onClick={()=>{setEditing({...staff,password:""});setIsNew(false);}} style={smallBtn(false,false,C)}>Edit</button>}{canEdit&&!isMe&&<button onClick={()=>setConfirmDel(staff.id)} style={smallBtn(true,false,C)}>Del</button>}</div>
             </div>);})}
         </div>
@@ -85,13 +109,13 @@ function SettingsStaff({C,F,adminAccounts,dbOps,currentAdmin,isSuperAdmin,showTo
 }
 
 function StaffModal({account,isNew,saving,roles,isSuperAdmin,onChange,onSave,onClose,C,F}){
-  const [showPass,setShowPass]=useState(false);const invalid=!account.name.trim()||!account.username.trim()||(isNew&&account.password.length<6);
+  const [showPass,setShowPass]=useState(false);const invalid=!account.name.trim()||!account.email.trim()||(isNew&&account.password.length<8);
   const cantPromote=!isSuperAdmin&&account.role==="Super Admin";
   return(<Modal t={C} title={isNew?"Add Staff Member":"Edit Staff Member"} onClose={onClose}>
-    <Field t={C} label="Full Name *" style={{marginBottom:14}}><input value={account.name} onChange={e=>onChange({name:e.target.value})} placeholder="e.g. Frank" style={inputSt(false,C)}/></Field>
-    <Field t={C} label="Username *" style={{marginBottom:14}}><input value={account.username} onChange={e=>onChange({username:e.target.value.toLowerCase().replace(/\s/g,"")})} placeholder="e.g. frank" style={{...inputSt(false,C),fontFamily:F.mono}}/></Field>
-    <Field t={C} label={isNew?"Password * (min 6 chars)":"New Password (leave blank to keep)"} style={{marginBottom:8}}><div style={{position:"relative"}}><input value={account.password} onChange={e=>onChange({password:e.target.value})} placeholder={isNew?"Set a password":"Leave blank to keep current"} type={showPass?"text":"password"} style={inputSt(false,C)}/><button onClick={()=>setShowPass(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:17}}>{showPass?"\u{1F648}":"\u{1F441}"}</button></div></Field>
-    <div style={{fontSize:12,color:C.muted,marginBottom:18}}>Passwords are hashed before storing.</div>
+    <Field t={C} label="Full Name *" style={{marginBottom:14}}><input value={account.name} onChange={e=>onChange({name:e.target.value})} placeholder="e.g. Frank Acevedo" style={inputSt(false,C)}/></Field>
+    <Field t={C} label="Email *" style={{marginBottom:14}}><input value={account.email} type="email" onChange={e=>onChange({email:e.target.value.trim()})} placeholder="e.g. frank@champsbutcher.com" style={inputSt(false,C)}/></Field>
+    <Field t={C} label={isNew?"Password * (min 8 chars)":"New Password (leave blank to keep)"} style={{marginBottom:8}}><div style={{position:"relative"}}><input value={account.password} onChange={e=>onChange({password:e.target.value})} placeholder={isNew?"Set a password":"Leave blank to keep current"} type={showPass?"text":"password"} style={inputSt(false,C)}/><button onClick={()=>setShowPass(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:17}}>{showPass?"\u{1F648}":"\u{1F441}"}</button></div></Field>
+    <div style={{fontSize:12,color:C.muted,marginBottom:18}}>This creates a Firebase login account for the staff member.</div>
     <Field t={C} label="Role" style={{marginBottom:22}}><select value={account.role} onChange={e=>onChange({role:e.target.value})} disabled={cantPromote} style={inputSt(true,C)}>{roles.map(r=><option key={r} value={r}>{r}</option>)}</select>{cantPromote&&<div style={{fontSize:11,color:C.errorText,marginTop:6}}>Only Super Admins can change this role.</div>}</Field>
     <div style={{display:"flex",justifyContent:"flex-end",gap:10}}><Btn t={C} ghost onClick={onClose}>Cancel</Btn><Btn t={C} primary onClick={onSave} disabled={invalid||saving}>{saving?"Saving\u2026":isNew?"Add Staff Member":"Save Changes"}</Btn></div>
   </Modal>);

@@ -8,8 +8,8 @@ service cloud.firestore {
         ? get(/databases/$(database)/documents/kioskUsers/$(request.auth.uid)).data.role
         : null;
     }
-    function isManager() { return role() in ['super_admin', 'manager', 'Super Admin']; }
-    function isDelivery() { return role() in ['super_admin', 'manager', 'delivery', 'Super Admin']; }
+    function isManager() { return role() in ['super_admin', 'manager', 'Super Admin', 'Manager', 'Admin']; }
+    function isDelivery() { return role() in ['super_admin', 'manager', 'delivery', 'Super Admin', 'Manager']; }
 
     // Menu & categories: public read, stock-only public update, admin full write
     match /kioskMenu/{docId} {
