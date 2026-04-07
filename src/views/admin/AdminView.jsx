@@ -54,9 +54,11 @@ export default function AdminView() {
   useEffect(() => { if (import.meta.env.DEV) runSeeds(); }, []);
   // Derive staff accounts from kioskUsers (roles that get admin panel access)
   const STAFF_ROLES = ["Super Admin", "Manager", "Admin", "Employee", "manager", "super_admin"];
+  const seen = new Set();
   const adminAccounts = users
     .filter(u => STAFF_ROLES.includes(u.role))
-    .map(u => ({ ...u, name: ((u.firstName || "") + " " + (u.lastName || "")).trim() || u.email || "Unknown" }));
+    .map(u => ({ ...u, name: ((u.firstName || "") + " " + (u.lastName || "")).trim() || u.email || "Unknown" }))
+    .filter(u => { const k = (u.email || u.id).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   const allReady = menuReady && usersReady && ordersReady && catsReady && adjustmentsReady && auditReady;
   if (!allReady) return <ModeLoadingScreen label="Loading Admin Panel..." />;
   return <AdminThemeProvider><AdminApp menu={menu} users={users} orders={orders} adminAccounts={adminAccounts} categories={categories} catNames={catNames} dbOps={dbOps} adjustments={adjustments} auditLogs={auditLogs} onExit={() => navigate("/")} /></AdminThemeProvider>;
