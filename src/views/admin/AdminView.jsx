@@ -7,7 +7,7 @@
  * Auth: Firebase Auth (OperatorGate) + kioskUsers role check (Super Admin / manager).
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   C as C_DARK, F as F_DARK, ADMIN_SESSION_MS,
   normalizeStatus,
@@ -21,9 +21,11 @@ import { useInventoryAdjustments } from "../../hooks/useInventoryAdjustments";
 import { useAuditLogs } from "../../hooks/useAuditLogs";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { ModeLoadingScreen } from "../../components/ui";
+import { ModeLoadingScreen, ErrorBoundary } from "../../components/ui";
 
 import { getAuth, signOut } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../../config/firebase";
 
 // ─── Extracted tab components ────────────────────────────────────────────────
 import { AccessDenied } from "./AccessDenied";
@@ -50,7 +52,6 @@ export default function AdminView() {
   const { adjustments, ready: adjustmentsReady } = useInventoryAdjustments();
   const { auditLogs, ready: auditReady } = useAuditLogs();
   const catNames = categories.map(c => c.name);
-  const dbOps    = createDbOps(menu, categories);
   useEffect(() => { if (import.meta.env.DEV) runSeeds(); }, []);
   // Derive staff accounts from kioskUsers (roles that get admin panel access)
   const STAFF_ROLES = ["Super Admin", "Manager", "Admin", "Employee", "manager", "super_admin"];
@@ -61,39 +62,54 @@ export default function AdminView() {
     .filter(u => { const k = (u.email || u.id).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   const allReady = menuReady && usersReady && ordersReady && catsReady && adjustmentsReady && auditReady;
   if (!allReady) return <ModeLoadingScreen label="Loading Admin Panel..." />;
-  return <AdminThemeProvider><AdminApp menu={menu} users={users} orders={orders} adminAccounts={adminAccounts} categories={categories} catNames={catNames} dbOps={dbOps} adjustments={adjustments} auditLogs={auditLogs} onExit={() => navigate("/")} /></AdminThemeProvider>;
+  return <AdminThemeProvider><AdminApp menu={menu} users={users} orders={orders} adminAccounts={adminAccounts} categories={categories} catNames={catNames} adjustments={adjustments} auditLogs={auditLogs} onExit={() => navigate("/")} /></AdminThemeProvider>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AdminApp — responsive sidebar + tab routing
 // ═══════════════════════════════════════════════════════════════════════════════
-function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, dbOps, adjustments, auditLogs, onExit }) {
+function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, adjustments, auditLogs, onExit }) {
   const { T: C, TF: F, theme, logoUrl, fontId } = useAdminTheme();
   const { user, setAdmin } = useAuth();
   const [tab, setTab] = useState("dashboard");
   const [toast, setToast] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const sessionTimerRef = useRef(null);
+  const [storeInfo, setStoreInfo] = useState(null);
   const {w}=useWindowSize();
   const isMobile=w<768;
   const isTablet=w>=768&&w<1024;
   const showSidebarPermanent=w>=1024;
 
-  // Load Google Fonts for selected font
+  // Load store info for dynamic shop name in pick tickets etc.
+  useEffect(()=>{getDoc(doc(db,"kioskConfig","storeInfo")).then(snap=>{if(snap.exists())setStoreInfo(snap.data());}).catch(()=>{});},[]);
+
+  // Load Google Fonts for selected font (clean up previous font links)
   useEffect(()=>{
     if(fontId==="default")return;
     const families={"inter":"Inter:wght@400;600;700;900","roboto":"Roboto:wght@400;500;700;900","mono":"JetBrains+Mono:wght@400;600;700"};
     const family=families[fontId];if(!family)return;
     const id="gfont-"+fontId;if(document.getElementById(id))return;
+    // Remove other font links to prevent accumulation
+    Object.keys(families).forEach(fid=>{if(fid!==fontId){const old=document.getElementById("gfont-"+fid);if(old)old.remove();}});
     const link=document.createElement("link");link.id=id;link.rel="stylesheet";link.href="https://fonts.googleapis.com/css2?family="+family+"&display=swap";document.head.appendChild(link);
   },[fontId]);
 
   // Derive admin identity from Firebase Auth user + kioskUsers role
   const ADMIN_ROLES = ["Super Admin", "Manager", "Admin", "manager", "super_admin"];
   const kioskUser = users.find(u => u.email && u.email.toLowerCase() === user?.email?.toLowerCase());
-  const loggedInAdmin = kioskUser && ADMIN_ROLES.includes(kioskUser.role)
-    ? { id: kioskUser.id, name: ((kioskUser.firstName || "") + " " + (kioskUser.lastName || "")).trim() || user.email, role: kioskUser.role === "super_admin" ? "Super Admin" : kioskUser.role }
-    : null;
+  const loggedInAdmin = useMemo(() => {
+    if (!kioskUser || !ADMIN_ROLES.includes(kioskUser.role)) return null;
+    return {
+      id: kioskUser.id,
+      name: ((kioskUser.firstName || "") + " " + (kioskUser.lastName || "")).trim() || user?.email,
+      role: kioskUser.role === "super_admin" ? "Super Admin" : kioskUser.role,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kioskUser?.id, kioskUser?.role, user?.email]);
+
+  const actor = loggedInAdmin ? { actorId: loggedInAdmin.id, actorName: loggedInAdmin.name } : {};
+  const dbOps = createDbOps(menu, categories, actor);
 
   useEffect(()=>{ setAdmin(loggedInAdmin); return ()=>setAdmin(null); },[loggedInAdmin, setAdmin]);
 
@@ -191,15 +207,17 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, db
           </div>
         </div>
         <div style={{padding:isMobile?"14px":isTablet?"20px":"26px"}}>
+          <ErrorBoundary key={tab} t={C}>
           {tab==="dashboard"  &&<AdminDashboard menu={menu} users={users} orders={orders} dbOps={dbOps} isMobile={isMobile} isTablet={isTablet}/>}
           {tab==="menu"       &&<MenuManager menu={menu} catNames={catNames} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
           {tab==="categories" &&<CategoriesManager categories={categories} menu={menu} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
           {tab==="users"      &&<UserManager users={users} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
-          {tab==="orders"     &&<OrderHistory orders={orders} users={users} menu={menu} dbOps={dbOps} showToast={showToast}/>}
+          {tab==="orders"     &&<OrderHistory orders={orders} users={users} menu={menu} dbOps={dbOps} showToast={showToast} shopName={storeInfo?.name}/>}
           {tab==="delivery"   &&<DeliveryPanel orders={orders} users={users} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
           {tab==="inventory"&&isSuperAdmin&&<InventoryHistoryPanel adjustments={adjustments}/>}
           {tab==="audit"&&isSuperAdmin&&<AuditLogPanel auditLogs={auditLogs}/>}
           {tab==="settings"&&<SettingsPanel showToast={showToast} adminAccounts={adminAccounts} dbOps={dbOps} currentAdmin={loggedInAdmin} isSuperAdmin={isSuperAdmin} categories={categories}/>}
+          </ErrorBoundary>
         </div>
       </main>
       {toast&&<div style={{position:"fixed",bottom:isMobile?14:26,right:isMobile?14:26,left:isMobile?14:"auto",background:toast.type==="success"?C.green:toast.type==="order"?"#1e3a5f":C.errorBg,color:toast.type==="success"?C.greenText:toast.type==="order"?"#93c5fd":C.errorText,border:"1px solid "+(toast.type==="success"?C.greenText:toast.type==="order"?"#3b82f6":C.errorText),borderRadius:12,padding:"12px 20px",fontSize:14,fontWeight:600,animation:"fadeUp .3s ease",zIndex:999,boxShadow:"0 8px 24px rgba(0,0,0,.5)",display:"flex",alignItems:"center",gap:8}}>{toast.type==="success"?"\u2713":toast.type==="order"?"\uD83D\uDCE6":"\u2715"} {toast.msg}</div>}

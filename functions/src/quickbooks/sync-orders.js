@@ -2,18 +2,10 @@ const { getFirestore } = require("firebase-admin/firestore");
 const { qbQuery, qbPost, qbGet } = require("./api");
 
 /**
- * Firestore onCreate trigger: when a kiosk order is placed, create an Invoice in QuickBooks.
- *
- * @param {object} event - Firestore event with data snapshot and params
+ * Core invoice creation logic — shared by the onCreate trigger and the retry endpoint.
+ * Writes qbInvoiceId + qbSyncedAt on success, qbSyncError + qbSyncAttemptedAt on failure.
  */
-async function onOrderCreated(event) {
-  const order = event.data.data();
-  const orderId = event.params.orderId;
-  const db = getFirestore();
-
-  // Skip if order already has a QB invoice (idempotency)
-  if (order.qbInvoiceId) return;
-
+async function createInvoiceForOrder(orderId, order, db) {
   try {
     // 1. Find or create customer in QuickBooks
     const customerRef = await findOrCreateCustomer(db, order);
@@ -57,19 +49,70 @@ async function onOrderCreated(event) {
       await db.collection("kioskOrders").doc(orderId).update({
         qbInvoiceId: qbInvoiceId,
         qbSyncedAt: Date.now(),
+        qbSyncError: null,
+        qbSyncAttemptedAt: null,
       });
     }
 
     console.log(`Order ${order.orderNumber} → QB Invoice ${qbInvoiceId}`);
+    return { success: true, qbInvoiceId };
   } catch (err) {
     console.error(`Failed to sync order ${orderId} to QB:`, err);
 
-    // Store error on the order so admin can see it
+    const errorMsg = err.statusCode ? `QuickBooks API error (${err.statusCode})` : "Sync failed";
     await db.collection("kioskOrders").doc(orderId).update({
-      qbSyncError: err.statusCode ? `QuickBooks API error (${err.statusCode})` : "Sync failed",
+      qbSyncError: errorMsg,
       qbSyncAttemptedAt: Date.now(),
     }).catch(() => {});
+
+    return { success: false, error: errorMsg };
   }
+}
+
+/**
+ * Firestore onCreate trigger: when a kiosk order is placed, create an Invoice in QuickBooks.
+ */
+async function onOrderCreated(event) {
+  const order = event.data.data();
+  const orderId = event.params.orderId;
+  const db = getFirestore();
+
+  // Skip if order already has a QB invoice (idempotency)
+  if (order.qbInvoiceId) return;
+
+  await createInvoiceForOrder(orderId, order, db);
+}
+
+/**
+ * HTTP endpoint: retry QB invoice creation for an order that previously failed to sync.
+ * POST body: { orderId }
+ */
+async function retrySyncOrder(req, res) {
+  const { orderId } = req.body;
+
+  if (!orderId) {
+    res.status(400).json({ error: "orderId required" });
+    return;
+  }
+
+  const db = getFirestore();
+  const orderDoc = await db.collection("kioskOrders").doc(orderId).get();
+
+  if (!orderDoc.exists) {
+    res.status(404).json({ error: "Order not found" });
+    return;
+  }
+
+  const order = orderDoc.data();
+
+  // Already synced — nothing to retry
+  if (order.qbInvoiceId) {
+    res.json({ success: true, qbInvoiceId: order.qbInvoiceId });
+    return;
+  }
+
+  const result = await createInvoiceForOrder(orderId, order, db);
+  res.status(result.success ? 200 : 500).json(result);
 }
 
 /**
@@ -220,4 +263,4 @@ async function sendInvoice(req, res) {
   }
 }
 
-module.exports = { onOrderCreated, sendInvoice };
+module.exports = { onOrderCreated, sendInvoice, retrySyncOrder };

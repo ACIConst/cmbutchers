@@ -6,7 +6,7 @@ import { Img } from "../../components/Img";
 import { addDoc, collection } from "firebase/firestore";
 import { db, CF_BASE } from "../../config/firebase";
 
-function printPickTicket(order, menu){
+function printPickTicket(order, menu, shopName = "Champ's Butcher Shop"){
     const items=order.items||[];const orderNum=String(order.orderNumber||"0000");
     let itemsHtml="";let bcIdx=0;
     items.forEach((i,idx)=>{
@@ -68,7 +68,7 @@ thead th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:
 </style></head><body>
 <div class="page">
 <div class="header">
-<div class="shop-name">Champ's Butcher Shop</div>
+<div class="shop-name">${shopName}</div>
 <div class="shop-sub">Halstead, KS</div>
 <div class="ticket-label">Pick Ticket</div>
 <div class="order-num">#${order.orderNumber||""}</div>
@@ -96,10 +96,10 @@ function OrderBarcode({value,small}){
   return <svg ref={svgRef}/>;
 }
 
-export function OrderHistory({ orders, users, menu, dbOps, showToast }) {const{T:C,TF:F}=useAdminTheme();
-  const [search,setSearch]=useState("");const [expanded,setExpanded]=useState(null);const [confirmClear,setConfirmClear]=useState(false);const [view,setView]=useState("active");const [statusFilter,setStatusFilter]=useState("all");const [savingStatus,setSavingStatus]=useState(null);const [customerFilter,setCustomerFilter]=useState("all");const [scanBarcode,setScanBarcode]=useState(null);const [confirmCancel,setConfirmCancel]=useState(null);const [sendingInvoice,setSendingInvoice]=useState(null);
+export function OrderHistory({ orders, users, menu, dbOps, showToast, shopName }) {const{T:C,TF:F}=useAdminTheme();
+  const [search,setSearch]=useState("");const [expanded,setExpanded]=useState(null);const [confirmClear,setConfirmClear]=useState(false);const [view,setView]=useState("active");const [statusFilter,setStatusFilter]=useState("all");const [savingStatus,setSavingStatus]=useState(null);const [customerFilter,setCustomerFilter]=useState("all");const [scanBarcode,setScanBarcode]=useState(null);const [confirmCancel,setConfirmCancel]=useState(null);const [sendingInvoice,setSendingInvoice]=useState(null);const [retryingSync,setRetryingSync]=useState(null);
   const [selectMode,setSelectMode]=useState(false);const [selected,setSelected]=useState(new Set());const [bulkSaving,setBulkSaving]=useState(false);
-  const QB_SEND_URL=`${CF_BASE}/qbSendInvoice`;
+  const QB_SEND_URL=`${CF_BASE}/qbSendInvoice`;const QB_RETRY_URL=`${CF_BASE}/qbRetrySyncOrder`;
   const terminalStatus="delivered";
   function getStatus(order){return normalizeStatus(order.status);}
   const isCancelled=o=>getStatus(o)==="cancelled";
@@ -113,16 +113,17 @@ export function OrderHistory({ orders, users, menu, dbOps, showToast }) {const{T
   const counts=ORDER_STATUSES.reduce((acc,s)=>{acc[s.id]=active.filter(o=>getStatus(o)===s.id).length;return acc;},{});
   async function setStatus(orderId,newStatus){setSavingStatus(orderId);try{await dbOps.updateOrder(orderId,{status:newStatus});}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
   async function printAndPick(order){
-    printPickTicket(order,menu);
+    printPickTicket(order,menu,shopName);
     if(getStatus(order)==="paid"){setSavingStatus(order.id);try{await dbOps.updateOrder(order.id,{status:"picking"});showToast("Status \u2192 Picking");}catch(e){console.error(e);showToast("Status update failed","error");}finally{setSavingStatus(null);}}
   }
   async function toggleItemChecked(order,itemIndex){const checked=[...(order.checkedItems||[])];const pos=checked.indexOf(itemIndex);if(pos===-1)checked.push(itemIndex);else checked.splice(pos,1);try{await dbOps.updateOrder(order.id,{checkedItems:checked});}catch(e){console.error(e);}}
-  async function completeOrder(orderId){setSavingStatus(orderId);try{const order=orders.find(o=>o.id===orderId);const archivedAt=new Date().toISOString();await dbOps.updateOrder(orderId,{status:terminalStatus,archived:true,archivedAt});if(order?.user){const matchedUser=users.find(u=>u.name===order.user);if(matchedUser){await addDoc(collection(db,"kioskUsers",matchedUser.id,"completedOrders"),{orderNumber:order.orderNumber||null,items:order.items||[],total:order.total||0,placedAt:order.ts||null,completedAt:archivedAt});}}showToast("Order completed");if(expanded===orderId)setExpanded(null);}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
+  async function completeOrder(orderId){setSavingStatus(orderId);try{const order=orders.find(o=>o.id===orderId);const archivedAt=new Date().toISOString();await dbOps.updateOrder(orderId,{status:terminalStatus,archived:true,archivedAt});if(order?.user){const matchedUser=users.find(u=>((u.firstName||"")+" "+(u.lastName||"")).trim()===order.user||u.name===order.user);if(matchedUser){await addDoc(collection(db,"kioskUsers",matchedUser.id,"completedOrders"),{orderNumber:order.orderNumber||null,items:order.items||[],total:order.total||0,placedAt:order.ts||null,completedAt:archivedAt});}}showToast("Order completed");if(expanded===orderId)setExpanded(null);}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
   async function restoreOrder(orderId){setSavingStatus(orderId);try{await dbOps.updateOrder(orderId,{status:"picking",archived:false,archivedAt:null,checkedItems:[]});showToast("Order restored");}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
   async function cancelOrder(id){setSavingStatus(id);try{await dbOps.updateOrder(id,{status:"cancelled",cancelledAt:new Date().toISOString(),cancelledBy:"admin"});showToast("Order cancelled");setConfirmCancel(null);if(expanded===id)setExpanded(null);}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
   async function restoreCancelled(id){setSavingStatus(id);try{await dbOps.updateOrder(id,{status:"placed",cancelledAt:null,cancelledBy:null});showToast("Order restored");}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
   async function handleClearAll(){try{await dbOps.clearOrders();showToast("Orders archived");setConfirmClear(false);setView("active");}catch(e){console.error(e);showToast("Failed","error");}}
   async function handleSendInvoice(order){setSendingInvoice(order.id);try{const res=await fetch(QB_SEND_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:order.id})});const data=await res.json();if(data.success)showToast("Invoice sent to customer");else showToast(data.error||"Failed to send","error");}catch(e){console.error(e);showToast("Failed to send invoice","error");}finally{setSendingInvoice(null);}}
+  async function handleRetrySync(order){setRetryingSync(order.id);try{const res=await fetch(QB_RETRY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:order.id})});const data=await res.json();if(!data.success)showToast(data.error||"Retry failed","error");}catch(e){console.error(e);showToast("Retry failed","error");}finally{setRetryingSync(null);}}
   function toggleSelect(id){setSelected(prev=>{const next=new Set(prev);if(next.has(id))next.delete(id);else next.add(id);return next;});}
   function toggleSelectAll(){if(selected.size===filtered.length)setSelected(new Set());else setSelected(new Set(filtered.map(o=>o.id)));}
   async function bulkAction(action){setBulkSaving(true);try{for(const id of selected){if(action==="paid")await dbOps.updateOrder(id,{status:"paid"});else if(action==="archive")await completeOrder(id);}showToast(`${selected.size} order(s) updated`);setSelected(new Set());setSelectMode(false);}catch(e){console.error(e);showToast("Bulk action failed","error");}finally{setBulkSaving(false);}}
@@ -144,7 +145,7 @@ export function OrderHistory({ orders, users, menu, dbOps, showToast }) {const{T
               {orderCancelled&&<div style={{display:"flex",gap:6,alignItems:"center"}}><span style={{background:C.errorBg,color:C.errorText,border:"1px solid "+C.errorText,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700}}>CANCELLED</span><button disabled={savingStatus===order.id} onClick={()=>restoreCancelled(order.id)} style={{background:C.amber,color:"#1c1400",border:"1px solid "+C.amber,borderRadius:6,padding:"4px 10px",cursor:"pointer",fontFamily:F.body,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{savingStatus===order.id?"...":"Restore"}</button></div>}
               {!order.archived&&!orderCancelled&&<div style={{display:"flex",gap:4,flexShrink:0,alignItems:"center",flexWrap:"wrap"}}>
                 <StatusBadge status={curStatus}/>
-                {curStatus==="placed"&&!order.qbInvoiceSent&&<button disabled={sendingInvoice===order.id||!order.qbInvoiceId} onClick={()=>handleSendInvoice(order)} style={{background:"#1a3a2a",color:"#7ee8a8",border:"1px solid #2CA01C",borderRadius:6,padding:"4px 10px",cursor:!order.qbInvoiceId?"wait":"pointer",fontFamily:F.body,fontSize:11,fontWeight:700,whiteSpace:"nowrap",opacity:!order.qbInvoiceId?.5:1}}>{sendingInvoice===order.id?"Sending...":!order.qbInvoiceId?"Syncing...":"Send Invoice"}</button>}
+                {curStatus==="placed"&&!order.qbInvoiceSent&&(order.qbSyncError?<div style={{display:"flex",gap:4,alignItems:"center"}}><span style={{color:"#fca5a5",fontSize:11,fontWeight:600,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={order.qbSyncError}>Sync failed</span><button disabled={retryingSync===order.id} onClick={()=>handleRetrySync(order)} style={{background:"#3b0a0a",color:"#fca5a5",border:"1px solid #dc2626",borderRadius:6,padding:"4px 10px",cursor:"pointer",fontFamily:F.body,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{retryingSync===order.id?"Retrying...":"Retry"}</button></div>:!order.qbInvoiceId?<span style={{color:C.muted,fontSize:11,fontStyle:"italic",whiteSpace:"nowrap"}}>Syncing…</span>:<button disabled={sendingInvoice===order.id} onClick={()=>handleSendInvoice(order)} style={{background:"#1a3a2a",color:"#7ee8a8",border:"1px solid #2CA01C",borderRadius:6,padding:"4px 10px",cursor:"pointer",fontFamily:F.body,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{sendingInvoice===order.id?"Sending...":"Send Invoice"}</button>)}
                 {curStatus==="placed"&&order.qbInvoiceSent&&<span style={{background:"#0b3d1a",color:"#4ade80",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>Invoice Sent</span>}
                 {curStatus==="placed"&&order.qbInvoiceSent&&<button disabled={savingStatus===order.id} onClick={()=>{if(!order.qbPaid)setStatus(order.id,"paid");}} style={{background:order.qbPaid?"#166534":"#7f1d1d",color:order.qbPaid?"#4ade80":"#fca5a5",border:"1px solid "+(order.qbPaid?"#22c55e":"#dc2626"),borderRadius:6,padding:"4px 10px",cursor:order.qbPaid?"default":"pointer",fontFamily:F.body,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{order.qbPaid?"Paid":"Unpaid"}</button>}
                 {(curStatus==="placed"||curStatus==="paid")&&<button disabled={savingStatus===order.id} onClick={()=>printAndPick(order)} style={{background:"#1e3a5f",color:"#93c5fd",border:"1px solid #3b82f6",borderRadius:6,padding:"4px 10px",cursor:"pointer",fontFamily:F.body,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>Pick Ticket</button>}

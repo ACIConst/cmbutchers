@@ -10,11 +10,11 @@ const { authUri, callback, disconnect } = require("./quickbooks/auth");
 const { refreshToken } = require("./quickbooks/tokens");
 
 // CORS: restrict browser requests to our domain only
+// Localhost origins only allowed in Firebase emulator (FUNCTIONS_EMULATOR=true)
 const allowedOrigins = [
   "https://cmbutchers.app",
   "https://www.cmbutchers.app",
-  "http://localhost:5173",
-  "http://localhost:5174",
+  ...(process.env.FUNCTIONS_EMULATOR === "true" ? ["http://localhost:5173", "http://localhost:5174"] : []),
 ];
 const publicOpts = { invoker: "public", cors: allowedOrigins };
 // Webhook needs open CORS (QB servers POST to it from any origin)
@@ -62,5 +62,8 @@ exports.kioskUpdateStaff = onRequest(publicOpts, updateStaff);
 exports.kioskDeleteStaff = onRequest(publicOpts, deleteStaff);
 
 // Send invoice via QuickBooks email
-const { sendInvoice } = require("./quickbooks/sync-orders");
+const { sendInvoice, retrySyncOrder } = require("./quickbooks/sync-orders");
 exports.qbSendInvoice = onRequest(publicOpts, sendInvoice);
+
+// Retry QB invoice sync for orders that failed on creation
+exports.qbRetrySyncOrder = onRequest(publicOpts, retrySyncOrder);
