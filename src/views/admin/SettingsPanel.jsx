@@ -168,6 +168,17 @@ function SettingsNotifications({C,F,cardSt,secTitle}){
   );
 }
 
+/** Map QB/network errors to clean user-facing messages — never expose raw API responses. */
+function qbErrMsg(e) {
+  const msg = String(e?.message || "");
+  if (!msg || msg === "undefined") return "QuickBooks error — try again";
+  if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("network"))
+    return "Network error — check your connection and try again";
+  // Backend messages are already sanitized after our error handling improvements;
+  // return them as-is (they're clean strings like "QuickBooks session expired…")
+  return msg;
+}
+
 function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categories}){
   const [status,setStatus]=useState(null);const [loading,setLoading]=useState(true);const [acting,setActing]=useState(false);
   const [companyName,setCompanyName]=useState(null);
@@ -213,7 +224,7 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
       const data=await res.json();
       if(data.success){setCompanyName(data.companyName);showToast("Connected to "+data.companyName);}
       else throw new Error(data.error);
-    }catch(e){console.error(e);showToast("Connection test failed: "+e.message,"error");}finally{setActing(false);}
+    }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setActing(false);}
   }
 
   async function handleSyncProducts(){
@@ -223,7 +234,7 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
       const data=await res.json();
       if(data.products){setQbProducts(data.products);setShowProductPicker(true);showToast(`Found ${data.count} products in QuickBooks`);}
       else throw new Error(data.error);
-    }catch(e){console.error(e);showToast("Failed to fetch products: "+e.message,"error");}finally{setActing(false);}
+    }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setActing(false);}
   }
 
   async function handleImportSelected(){
@@ -235,7 +246,7 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
       const data=await res.json();
       if(data.success){showToast(`Imported ${data.created} new, updated ${data.updated} existing`);setShowProductPicker(false);setSelectedProducts({});}
       else throw new Error(data.error);
-    }catch(e){console.error(e);showToast("Import failed: "+e.message,"error");}finally{setImporting(false);}
+    }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setImporting(false);}
   }
 
   async function handleRefreshStock(){
@@ -243,9 +254,9 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
     try{
       const res=await fetch(QB_REFRESH_URL);
       const data=await res.json();
-      if(data.success)showToast(`Stock refreshed: ${data.updated} of ${data.total} items updated`);
+      if(data.success)showToast(`Refreshed: ${data.updated} of ${data.total} items updated, ${data.images||0} images synced`);
       else throw new Error(data.error);
-    }catch(e){console.error(e);showToast("Stock refresh failed: "+e.message,"error");}finally{setRefreshing(false);}
+    }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setRefreshing(false);}
   }
 
   function toggleProduct(p){
@@ -260,6 +271,7 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
 
   if(loading)return<div style={{color:C.muted,padding:20}}>Loading...</div>;
   const connected=status?.connected===true;
+  const autoSyncError=status?.autoSyncError||null;
   const btnSt={background:C.surface,border:"1px solid "+C.borderMid,color:C.cream,borderRadius:10,padding:"12px 18px",cursor:"pointer",fontFamily:F.body,fontSize:13,fontWeight:600,transition:"opacity .2s",width:"100%",textAlign:"center"};
 
   return(
@@ -272,6 +284,7 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
             <div style={{fontSize:14,color:C.cream,fontWeight:600}}>{connected?"Connected"+(companyName?" to "+companyName:""):"Not Connected"}</div>
             {connected&&status?.connectedAt&&<div style={{fontSize:12,color:C.muted,marginTop:2}}>Since {new Date(status.connectedAt).toLocaleDateString()}</div>}
           </div>
+        {autoSyncError&&<div style={{fontSize:12,color:"#fca5a5",background:"rgba(220,38,38,.12)",border:"1px solid rgba(220,38,38,.3)",borderRadius:8,padding:"6px 10px",marginLeft:8,maxWidth:260}} title={autoSyncError}>⚠ Auto-sync error</div>}
         </div>
         {!connected?(
           <button onClick={handleConnect} disabled={acting||!isSuperAdmin} style={{...btnSt,background:"#2CA01C",border:"none",color:"#fff",fontWeight:700}}>{acting?"Redirecting...":"Connect to QuickBooks"}</button>
@@ -289,7 +302,7 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
         <div style={{fontSize:12,color:C.muted,marginBottom:16}}>Import products from QuickBooks and keep stock levels in sync.</div>
         <div style={{display:"flex",gap:10,marginBottom:12}}>
           <button onClick={handleSyncProducts} disabled={acting} style={btnSt}>{acting?"Fetching...":"Sync Products from QB"}</button>
-          <button onClick={handleRefreshStock} disabled={refreshing} style={btnSt}>{refreshing?"Refreshing...":"Refresh Stock Levels"}</button>
+          <button onClick={handleRefreshStock} disabled={refreshing} style={btnSt}>{refreshing?"Refreshing...":"Refresh from QB"}</button>
         </div>
         {status?.lastSyncAt&&<div style={{fontSize:11,color:C.muted}}>Last synced: {new Date(status.lastSyncAt).toLocaleString()}</div>}
       </div>}

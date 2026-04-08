@@ -10,16 +10,34 @@ function getBaseUrl() {
 }
 
 /**
+ * Map a QB HTTP status code to a clean, user-facing message.
+ * Raw response bodies stay in logs only — never surfaced to the UI.
+ */
+function qbUserMessage(statusCode) {
+  switch (statusCode) {
+    case 400: return "Invalid request — check order data and try again";
+    case 401: return "QuickBooks session expired — reconnect in Settings";
+    case 403: return "QuickBooks access denied — check app permissions";
+    case 429: return "QuickBooks rate limit reached — try again in a moment";
+    case 500:
+    case 503: return "QuickBooks is temporarily unavailable — try again shortly";
+    default:  return `QuickBooks error (${statusCode}) — try again`;
+  }
+}
+
+/**
  * Build a QB API error with intuit_tid for Intuit's support/assessment requirements.
  * intuit_tid is a transaction ID that Intuit uses to trace API calls in their system.
+ * Raw response body is logged but NOT included in err.message (prevents leaking to UI).
  */
 function buildQBError(method, endpoint, res, body) {
   const intuitTid = res.headers.get("intuit_tid") || "unknown";
-  const msg = `QB API ${method} ${endpoint} failed (${res.status}) [intuit_tid: ${intuitTid}]: ${body}`;
-  console.error(msg);
-  const err = new Error(msg);
+  // Log full details for debugging; keep err.message clean for propagation
+  console.error(`QB API ${method} ${endpoint} failed (${res.status}) [intuit_tid: ${intuitTid}]:`, body);
+  const err = new Error(qbUserMessage(res.status));
   err.intuit_tid = intuitTid;
   err.statusCode = res.status;
+  err.userMessage = qbUserMessage(res.status);
   return err;
 }
 

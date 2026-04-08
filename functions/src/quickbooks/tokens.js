@@ -52,7 +52,13 @@ async function refreshToken(req, res) {
     res.json({ success: true, expiresIn: tokens.expires_in });
   } catch (err) {
     console.error("QuickBooks token refresh error:", err);
-    res.status(500).json({ error: "Token refresh failed" });
+    // intuit-oauth throws with http_response.statusCode on auth failures
+    const status = err.http_response?.statusCode || err.statusCode;
+    if (status === 401 || status === 400) {
+      res.status(401).json({ error: "QuickBooks session expired — reconnect in Settings" });
+    } else {
+      res.status(500).json({ error: "QuickBooks is temporarily unavailable — try again shortly" });
+    }
   }
 }
 
@@ -76,7 +82,21 @@ async function getValidToken() {
     const oauthClient = createOAuthClient();
     oauthClient.setToken({ refresh_token: decrypt(stored.refreshToken) });
 
-    const authResponse = await oauthClient.refresh();
+    let authResponse;
+    try {
+      authResponse = await oauthClient.refresh();
+    } catch (err) {
+      console.error("QB proactive token refresh failed:", err);
+      const status = err.http_response?.statusCode || err.statusCode;
+      const refreshErr = new Error(
+        status === 401 || status === 400
+          ? "QuickBooks session expired — reconnect in Settings"
+          : "QuickBooks is temporarily unavailable — try again shortly"
+      );
+      refreshErr.statusCode = status || 500;
+      refreshErr.userMessage = refreshErr.message;
+      throw refreshErr;
+    }
     const tokens = authResponse.getJson();
 
     await db.collection("qbTokens").doc("current").update({

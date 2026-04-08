@@ -101,11 +101,9 @@ async function importSelectedProducts(req, res) {
       // Check if this QB item is already linked to a kiosk menu item
       const existing = await menuRef.where("qbItemId", "==", item.qbItemId).limit(1).get();
 
-      // Try to fetch product image from QB
-      let imageUrl = "";
-      if (existing.empty || !existing.docs[0].data().image) {
-        imageUrl = await fetchQBItemImage(item.qbItemId);
-      }
+      // Always fetch latest image from QB (handles new photos and replacements)
+      let imageUrl = await fetchQBItemImage(item.qbItemId);
+      if (imageUrl) imageUrl = `${imageUrl}?v=${Date.now()}`;
 
       const data = {
         qbItemId: item.qbItemId,
@@ -136,8 +134,8 @@ async function importSelectedProducts(req, res) {
       } else {
         // Update existing linked item (preserve kiosk-only fields like image, menuOrder)
         const updateData = { ...data };
-        // Only set image if we got one from QB and existing doesn't have one
-        if (imageUrl && !existing.docs[0].data().image) {
+        // Update image if QB returned one
+        if (imageUrl) {
           updateData.image = imageUrl;
         }
         await existing.docs[0].ref.update(updateData);
@@ -183,6 +181,7 @@ async function refreshStock(req, res) {
     }
 
     let updated = 0;
+    let imagesUpdated = 0;
     for (const doc of menuSnap.docs) {
       const menuItem = doc.data();
       const qbItem = qbItems[menuItem.qbItemId];
@@ -195,15 +194,29 @@ async function refreshStock(req, res) {
       const newDesc = qbItem.Description || "";
       const newSku = qbItem.Sku || "";
 
-      // Update if ANY QB-managed field changed
-      if (
+      // Also sync the product image from QB
+      let imageUrl = await fetchQBItemImage(menuItem.qbItemId);
+      let imageUpdate = {};
+      if (imageUrl) {
+        // QB has an image — always update with cache buster
+        imageUpdate.image = `${imageUrl}?v=${Date.now()}`;
+        imagesUpdated++;
+      } else if (menuItem.image && menuItem.image.includes("menu-images/qb-")) {
+        // QB image was removed — clear only if it was a QB-managed image
+        imageUpdate.image = "";
+        imagesUpdated++;
+      }
+
+      // Update if ANY QB-managed field changed (including image)
+      const fieldsChanged =
         menuItem.stock !== newStock ||
         menuItem.inStock !== newInStock ||
         menuItem.price !== newPrice ||
         menuItem.name !== newName ||
         menuItem.description !== newDesc ||
-        menuItem.sku !== newSku
-      ) {
+        menuItem.sku !== newSku;
+
+      if (fieldsChanged || Object.keys(imageUpdate).length > 0) {
         await doc.ref.update({
           stock: newStock,
           inStock: newInStock,
@@ -211,6 +224,7 @@ async function refreshStock(req, res) {
           name: newName,
           description: newDesc,
           sku: newSku,
+          ...imageUpdate,
           qbSyncedAt: Date.now(),
           updatedAt: new Date(),
         });
@@ -218,7 +232,7 @@ async function refreshStock(req, res) {
       }
     }
 
-    res.json({ success: true, updated, total: menuSnap.size });
+    res.json({ success: true, updated, images: imagesUpdated, total: menuSnap.size });
   } catch (err) {
     console.error("QB refresh stock error:", err);
     res.status(500).json({ error: "Failed to refresh stock from QuickBooks" });
@@ -260,6 +274,24 @@ async function autoRefreshStock() {
     console.log("QB auto-sync skipped: not connected");
     return;
   }
+
+  try {
+    await runAutoRefreshStock(db);
+    // Clear any previous error on success
+    await db.collection("kioskConfig").doc("qbConnection").update({
+      autoSyncError: null,
+      autoSyncFailedAt: null,
+    }).catch(() => {});
+  } catch (err) {
+    console.error("QB auto-sync failed:", err);
+    await db.collection("kioskConfig").doc("qbConnection").update({
+      autoSyncError: err.userMessage || "Auto-sync failed — check QuickBooks connection",
+      autoSyncFailedAt: Date.now(),
+    }).catch(() => {});
+  }
+}
+
+async function runAutoRefreshStock(db) {
 
   const menuSnap = await db.collection("kioskMenu").where("qbItemId", "!=", "").get();
   if (menuSnap.empty) {
@@ -308,6 +340,21 @@ async function autoRefreshStock() {
     }
   }
 
+  // Fill in missing images for items that don't have one yet
+  let imagesFilled = 0;
+  for (const doc of menuSnap.docs) {
+    const menuItem = doc.data();
+    if (menuItem.image) continue; // Already has an image, skip
+    const imageUrl = await fetchQBItemImage(menuItem.qbItemId);
+    if (imageUrl) {
+      await doc.ref.update({
+        image: `${imageUrl}?v=${Date.now()}`,
+        updatedAt: new Date(),
+      });
+      imagesFilled++;
+    }
+  }
+
   // Check payment status on recent orders with QB invoices
   let paidCount = 0;
   const recentOrders = await db.collection("kioskOrders")
@@ -328,7 +375,7 @@ async function autoRefreshStock() {
         paidCount++;
       }
     } catch (e) {
-      // Skip if invoice read fails
+      console.warn(`QB auto-sync: failed to check invoice ${order.qbInvoiceId}:`, e.message);
     }
   }
 
@@ -337,7 +384,7 @@ async function autoRefreshStock() {
     lastSyncAt: Date.now(),
   }).catch(() => {});
 
-  console.log(`QB auto-sync complete: ${updated} items updated, ${paidCount} invoices marked paid`);
-}
+  console.log(`QB auto-sync complete: ${updated} items updated, ${imagesFilled} images filled, ${paidCount} invoices marked paid`);
+} // end runAutoRefreshStock
 
 module.exports = { fetchQBProducts, importSelectedProducts, refreshStock, testConnection, autoRefreshStock };
