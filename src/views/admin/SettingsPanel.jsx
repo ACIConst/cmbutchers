@@ -237,9 +237,9 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
     setActing(true);
     try{
       await fetchAdminJson(QB_DISCONNECT_URL,{method:"POST"});
-      await setDoc(doc(db,"kioskConfig","qbConnection"),{connected:false,disconnectedAt:Date.now()},{merge:true});
+      // Backend already writes connected:false to Firestore — just update local state
       setStatus({connected:false});setCompanyName(null);showToast("QuickBooks disconnected");
-    }catch(e){console.error(e);showToast("Failed to disconnect","error");}finally{setActing(false);}
+    }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setActing(false);}
   }
 
   async function handleTestConnection(){
