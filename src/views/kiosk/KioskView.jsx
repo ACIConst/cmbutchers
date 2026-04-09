@@ -3,12 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { C, F, GLASS, GLASS_MODAL, MAX_ITEM_QTY, KIOSK_CART_IDLE_MS, EXIT_HOLD_MS, MAX_PIN_ATTEMPTS, PIN_LOCKOUT_SECS, DELIVERY_LOCATIONS } from "../../styles/tokens";
 import { useIdleTimer } from "../../hooks/useIdleTimer";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
-import { useMenu, useUsers, useCategories, createDbOps } from "../../hooks/useFirestore";
+import { useMenu, useCategories } from "../../hooks/useFirestore";
 import { Img } from "../../components/Img";
 import { KioskBtn, KQtyBtn, ModeLoadingScreen } from "../../components/ui";
 import { isOrderingOpen, getDeliveryDate, fmtDate } from "../../utils";
-import { addDoc, updateDoc, doc, collection, getDocs, query as fsQuery, orderBy, limit } from "firebase/firestore";
-import { db, CF_BASE } from "../../config/firebase";
+import { CF_BASE } from "../../config/firebase";
 
 function CutoffBanner() {
   const open = isOrderingOpen();
@@ -18,9 +17,35 @@ function CutoffBanner() {
   return <div style={{background:C.red,color:C.cream,textAlign:"center",padding:"14px 16px",fontSize:17,fontWeight:700,letterSpacing:1,fontFamily:F.display}}>Orders placed now will be delivered Friday {formatted}</div>;
 }
 
+function KioskField({ htmlFor, label, children, style }) {
+  return (
+    <div style={style}>
+      <label htmlFor={htmlFor} style={{display:"block",fontSize:11,letterSpacing:2,textTransform:"uppercase",color:C.muted,marginBottom:6}}>
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
 function KioskCard({ item, idx, hov, onHover, onClick }) {
   return (
-    <div className={item.inStock?"touch-active":""} style={{background:C.card,border:"1px solid "+(hov&&item.inStock?C.red+"66":C.border),borderRadius:16,overflow:"hidden",cursor:item.inStock?"pointer":"default",transform:hov&&item.inStock?"translateY(-3px)":"translateY(0)",boxShadow:hov&&item.inStock?"0 12px 36px "+C.redGlow:"0 2px 12px rgba(0,0,0,.35)",transition:"all .25s ease",opacity:item.inStock?1:.5,animation:"fadeUp .3s ease "+idx*40+"ms backwards"}} onClick={onClick} onMouseEnter={()=>onHover(item.id)} onMouseLeave={()=>onHover(null)}>
+    <div
+      className={item.inStock?"touch-active":""}
+      role="button"
+      tabIndex={item.inStock ? 0 : -1}
+      aria-disabled={!item.inStock}
+      style={{background:C.card,border:"1px solid "+(hov&&item.inStock?C.red+"66":C.border),borderRadius:16,overflow:"hidden",cursor:item.inStock?"pointer":"default",transform:hov&&item.inStock?"translateY(-3px)":"translateY(0)",boxShadow:hov&&item.inStock?"0 12px 36px "+C.redGlow:"0 2px 12px rgba(0,0,0,.35)",transition:"all .25s ease",opacity:item.inStock?1:.5,animation:"fadeUp .3s ease "+idx*40+"ms backwards"}}
+      onClick={item.inStock ? onClick : undefined}
+      onKeyDown={item.inStock ? (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      } : undefined}
+      onMouseEnter={()=>onHover(item.id)}
+      onMouseLeave={()=>onHover(null)}
+    >
       <div style={{position:"relative",height:"clamp(140px, 25vw, 190px)",overflow:"hidden"}}>
         <Img src={item.image} alt={item.name} style={{width:"100%",height:"100%",objectFit:"cover",filter:!item.inStock?"grayscale(90%) brightness(.5)":"brightness(.85)",transform:hov&&item.inStock?"scale(1.05)":"scale(1)",transition:"transform .4s ease"}}/>
         <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(15,13,11,.8),transparent 55%)"}}/>
@@ -50,7 +75,7 @@ function KioskCard({ item, idx, hov, onHover, onClick }) {
 function SuccessScreen({ order, onReset, onViewHistory }) {
   const TIMER=45;
   const [countdown, setCountdown] = useState(TIMER);
-  useEffect(()=>{ const iv=setInterval(()=>setCountdown(c=>{if(c<=1){onReset();return 0;}return c-1;}),1000); return()=>clearInterval(iv); },[]);
+  useEffect(()=>{ const iv=setInterval(()=>setCountdown(c=>{if(c<=1){onReset();return 0;}return c-1;}),1000); return()=>clearInterval(iv); },[onReset]);
   const pct = (countdown/TIMER)*100;
   const delivDate=getDeliveryDate();
   return (
@@ -81,19 +106,41 @@ function SuccessScreen({ order, onReset, onViewHistory }) {
   );
 }
 
-function MyOrdersScreen({ userId, menu, onReorder, onBack }) {
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
+function MyOrdersScreen({ userId, sessionToken, menu, onReorder, onBack }) {
+  const historyKey = userId && sessionToken ? `${userId}:${sessionToken}` : null;
+  const [historyState, setHistoryState] = useState({ key: null, orders: [], error: "" });
 
   useEffect(() => {
-    if (!userId) { setLoading(false); return; }
-    const ref = collection(db, "kioskUsers", userId, "completedOrders");
-    const q = fsQuery(ref, orderBy("completedAt", "desc"), limit(20));
-    getDocs(q).then(snap => {
-      setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }).catch(e => console.error("Failed to load order history:", e))
-      .finally(() => setLoading(false));
-  }, [userId]);
+    if (!historyKey) return undefined;
+
+    let cancelled = false;
+    fetch(`${CF_BASE}/kioskGetOrderHistory`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, sessionToken }),
+    }).then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.success === false) {
+        throw new Error(data.error || "Failed to load order history.");
+      }
+      if (!cancelled) {
+        setHistoryState({ key: historyKey, orders: data.orders || [], error: "" });
+      }
+    }).catch((e) => {
+      console.error("Failed to load order history:", e);
+      if (!cancelled) {
+        setHistoryState({ key: historyKey, orders: [], error: e.message || "Failed to load order history." });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [historyKey, sessionToken, userId]);
+
+  const loading = Boolean(historyKey) && historyState.key !== historyKey;
+  const orders = historyState.key === historyKey ? historyState.orders : [];
+  const loadError = historyState.key === historyKey ? historyState.error : "";
 
   function handleReorder(pastOrder) {
     const reorderItems = [];
@@ -116,7 +163,12 @@ function MyOrdersScreen({ userId, menu, onReorder, onBack }) {
         <div style={{fontFamily:F.brand,fontSize:24,fontWeight:900,letterSpacing:1}}>My Orders</div>
         <KioskBtn onClick={onBack}>Back</KioskBtn>
       </div>
-      {orders.length === 0 ? (
+      {loadError ? (
+        <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+          <div style={{fontSize:18,fontFamily:F.display,marginBottom:12}}>We couldn't load your past orders</div>
+          <div style={{fontSize:14,color:C.border}}>{loadError}</div>
+        </div>
+      ) : orders.length === 0 ? (
         <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
           <div style={{fontSize:42,marginBottom:16,opacity:.4}}>📦</div>
           <div style={{fontSize:18,fontFamily:F.display}}>No past orders yet</div>
@@ -149,7 +201,7 @@ function MyOrdersScreen({ userId, menu, onReorder, onBack }) {
   );
 }
 
-function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
+function KioskApp({ menu, categories, onExit }) {
   const [cart,setCart]=useState([]);
   const [selected,setSelected]=useState(null);
   const [qty,setQty]=useState(1);
@@ -177,7 +229,6 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
   const [resetStep,setResetStep]=useState(1); // 1=verify, 2=new password
   const [resetErr,setResetErr]=useState("");
   const [resetLoading,setResetLoading]=useState(false);
-  const [resetUserId,setResetUserId]=useState(null);
   // Show/hide password toggles
   const [showLoginPass,setShowLoginPass]=useState(false);
   const [showRegPass,setShowRegPass]=useState(false);
@@ -199,8 +250,29 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
   const cartQty=cart.reduce((s,i)=>s+i.quantity,0);
   const cartTotal=cart.reduce((s,i)=>s+i.price*i.quantity,0);
 
-  const goIdle=useCallback(()=>{if(view!=="success")reset();},[view]);
+  function getMaxQtyForItem(itemId, fallbackStock = null) {
+    const liveItem = menu.find((entry) => entry.id === itemId);
+    const stock = liveItem?.stock ?? fallbackStock;
+    return stock != null ? Math.min(MAX_ITEM_QTY, Math.max(0, stock)) : MAX_ITEM_QTY;
+  }
+
+  const resetAuth=useCallback(()=>{setAuthMode("choose");setAuthEmail("");setAuthPass("");setAuthErr("");setRegFirst("");setRegLast("");setRegPhone("");setRegEmail("");setRegPass("");setRegLocation(DELIVERY_LOCATIONS[0]);setRegErr("");setResetEmail("");setResetPhone("");setResetNewPass("");setResetStep(1);setResetErr("");setShowLoginPass(false);setShowRegPass(false);setShowResetPass(false);},[]);
+  const reset=useCallback(()=>{setCart([]);resetAuth();setOrderResult(null);setLoggedInUser(null);setView("idle");setActiveCat("All");setSelected(null);},[resetAuth]);
+  const goIdle=useCallback(()=>{if(view!=="success")reset();},[reset, view]);
   useIdleTimer(view==="idle"?99999999:KIOSK_CART_IDLE_MS,goIdle);
+
+  async function postKioskJson(path, body) {
+    const response = await fetch(`${CF_BASE}/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.success === false) {
+      throw new Error(data.error || `Request failed (${response.status})`);
+    }
+    return data;
+  }
 
   function startExitHold(){setExitProgress(1);exitHoldRef.current=setTimeout(()=>{setExitProgress(0);onExit();},EXIT_HOLD_MS);}
   function cancelExitHold(){clearTimeout(exitHoldRef.current);setExitProgress(0);}
@@ -220,7 +292,7 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
       const res=await fetch(`${CF_BASE}/kioskVerifyPassword`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:authEmail.trim(),password:authPass})});
       const data=await res.json();
       if(data.success){await placeOrder(data.user);}
-      else{setAuthErr(data.error==="Invalid credentials"?"Invalid email or password.":"Login failed. Try again.");setShaking(true);setTimeout(()=>setShaking(false),700);}
+      else{setAuthErr(data.error==="Invalid credentials"?"Invalid email or password.":data.error||"Login failed. Please try again.");setShaking(true);setTimeout(()=>setShaking(false),700);}
     }catch(e){console.error("Login error:",e);setAuthErr(e instanceof TypeError?"No internet connection. Please try again.":"Something went wrong. Please try again.");setShaking(true);setTimeout(()=>setShaking(false),700);}
     finally{setAuthLoading(false);}
   }
@@ -231,47 +303,37 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
     if(!regEmail.trim()||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail.trim())){setRegErr("Valid email required.");return;}
     if(regPass.length<8){setRegErr("Password must be at least 8 characters.");return;}
     if(!regPhone.trim()){setRegErr("Phone number required.");return;}
-    const duplicate=users.find(u=>u.email&&u.email.toLowerCase()===regEmail.trim().toLowerCase());
-    if(duplicate){setRegErr("An account with this email already exists. Please log in.");return;}
     setRegLoading(true);setRegErr("");
     try{
-      // Hash password server-side with bcrypt
-      const hashRes=await fetch(`${CF_BASE}/kioskHashPassword`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:regPass})});
-      if(!hashRes.ok){const errData=await hashRes.json().catch(()=>({}));throw new Error(errData.error||"Unable to create account. Please try again.");}
-      const hashData=await hashRes.json();
-      if(!hashData.hash)throw new Error("Hash failed");
-      const newUser={firstName:regFirst.trim(),lastName:regLast.trim(),email:regEmail.trim().toLowerCase(),phone:regPhone.replace(/\D/g,""),passwordHash:hashData.hash,role:"Customer",deliveryLocation:regLocation};
-      const docRef=await addDoc(collection(db,"kioskUsers"),newUser);
-      await placeOrder({id:docRef.id,...newUser});
+      const data=await postKioskJson("kioskRegisterUser",{firstName:regFirst.trim(),lastName:regLast.trim(),email:regEmail.trim().toLowerCase(),password:regPass,phone:regPhone,deliveryLocation:regLocation});
+      await placeOrder(data.user);
     }catch(e){
-      console.error(e);setRegErr(e instanceof TypeError?"No internet connection. Please try again.":"Registration failed. Please try again.");
+      console.error(e);setRegErr(e instanceof TypeError?"No internet connection. Please try again.":e.message||"Registration failed. Please try again.");
     }finally{setRegLoading(false);}
   }
 
   async function placeOrder(user){
-    const userName=(user.firstName||"")+" "+(user.lastName||"");
-    const orderData={user:userName.trim()||user.name||"Customer",userId:user.id,email:user.email||"",deliveryLocation:user.deliveryLocation||"",items:cart.map(i=>({id:i.id,name:i.name,price:i.price,quantity:i.quantity,image:i.image||"",sku:i.sku||"",barcode:i.barcode||"",barcodeImage:i.barcodeImage||"",qbItemId:i.qbItemId||""})),total:cartTotal,ts:new Date().toISOString()};
     try{
-      const barcode=await addOrder(orderData);
-      setOrderResult({...orderData,orderNumber:barcode,displayId:barcode,email:user.email||""});
+      const data=await postKioskJson("kioskPlaceOrder",{userId:user.id,items:cart.map(i=>({id:i.id,quantity:i.quantity}))});
+      setOrderResult(data.order);
       setLoggedInUser(user);
       setView("success");
     }catch(e){
       console.error("Order failed:",e);
-      setAuthErr("Failed to place order. Please try again.");
+      setAuthErr(e.message||"Failed to place order. Please try again.");
     }
   }
 
-  function handleResetVerify(){
+  async function handleResetVerify(){
     if(!resetEmail.trim()||!resetPhone.trim()){setResetErr("Enter your email and phone number.");return;}
-    const cleanPhone=resetPhone.replace(/\D/g,"");
-    const user=users.find(u=>u.email&&u.email.toLowerCase()===resetEmail.trim().toLowerCase());
-    if(!user){setResetErr("No account found with that email.");return;}
-    const userPhone=(user.phone||"").replace(/\D/g,"");
-    if(!userPhone||userPhone!==cleanPhone){setResetErr("Phone number doesn't match our records.");return;}
-    setResetUserId(user.id);
-    setResetErr("");
-    setResetStep(2);
+    setResetLoading(true);setResetErr("");
+    try{
+      await postKioskJson("kioskVerifyResetIdentity",{email:resetEmail.trim(),phone:resetPhone});
+      setResetStep(2);
+    }catch(e){
+      console.error(e);
+      setResetErr(e instanceof TypeError?"No internet connection. Please try again.":e.message||"We couldn't verify that account.");
+    }finally{setResetLoading(false);}
   }
 
   async function handleResetPassword(){
@@ -279,28 +341,21 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
     if(resetNewPass.length<8){setResetErr("Password must be at least 8 characters.");return;}
     setResetLoading(true);setResetErr("");
     try{
-      const hashRes=await fetch(`${CF_BASE}/kioskHashPassword`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:resetNewPass})});
-      if(!hashRes.ok){const errData=await hashRes.json().catch(()=>({}));throw new Error(errData.error||"Unable to reset password. Please try again.");}
-      const hashData=await hashRes.json();
-      if(!hashData.hash)throw new Error("Hash failed");
-      await updateDoc(doc(db,"kioskUsers",resetUserId),{passwordHash:hashData.hash});
+      await postKioskJson("kioskResetPassword",{email:resetEmail.trim(),phone:resetPhone,password:resetNewPass});
       setAuthMode("login");
       setAuthErr("");
       setAuthEmail(resetEmail);
       setAuthPass("");
-      setResetEmail("");setResetPhone("");setResetNewPass("");setResetStep(1);setResetUserId(null);
+      setResetEmail("");setResetPhone("");setResetNewPass("");setResetStep(1);
       setAuthErr("Password updated! Sign in with your new password.");
     }catch(e){
       console.error(e);
-      setResetErr(e instanceof TypeError?"No internet connection. Please try again.":"Failed to update password. Please try again.");
+      setResetErr(e instanceof TypeError?"No internet connection. Please try again.":e.message||"Failed to update password. Please try again.");
     }finally{setResetLoading(false);}
   }
 
-  function resetAuth(){setAuthMode("choose");setAuthEmail("");setAuthPass("");setAuthErr("");setRegFirst("");setRegLast("");setRegPhone("");setRegEmail("");setRegPass("");setRegLocation(DELIVERY_LOCATIONS[0]);setRegErr("");setResetEmail("");setResetPhone("");setResetNewPass("");setResetStep(1);setResetErr("");setResetUserId(null);setShowLoginPass(false);setShowRegPass(false);setShowResetPass(false);}
-  function reset(){setCart([]);resetAuth();setOrderResult(null);setLoggedInUser(null);setView("idle");setActiveCat("All");setSelected(null);}
-
   if(view==="idle")return(
-    <div className="kiosk-root" onClick={()=>setView("menu")} style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",position:"relative",overflow:"hidden",padding:"0 20px"}}>
+    <div className="kiosk-root" role="button" tabIndex={0} aria-label="Open kiosk menu" onClick={()=>setView("menu")} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();setView("menu");}}} style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",position:"relative",overflow:"hidden",padding:"0 20px"}}>
       <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:"linear-gradient(90deg,transparent,"+C.red+",transparent)"}}/>
       <div style={{position:"absolute",top:"30%",left:"50%",transform:"translate(-50%,-50%)",width:400,height:400,borderRadius:"50%",background:"radial-gradient(circle, rgba(155,28,28,.08), transparent 70%)",pointerEvents:"none"}}/>
       <div style={{fontFamily:F.brand,fontSize:"clamp(36px, 10vw, 60px)",fontWeight:900,color:C.cream,letterSpacing:8,lineHeight:1,textAlign:"center"}}>CHAMP'S MEATS</div>
@@ -313,8 +368,8 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
     </div>
   );
 
-  if(view==="success"&&orderResult)return <SuccessScreen order={orderResult} onReset={reset} onViewHistory={loggedInUser?()=>setView("history"):null}/>;
-  if(view==="history"&&loggedInUser)return <MyOrdersScreen userId={loggedInUser.id} menu={menu} onBack={()=>setView(orderResult?"success":"menu")} onReorder={(items,dropped)=>{setCart(items);if(dropped>0)setAuthErr(dropped+" item(s) no longer available");setView("cart");}}/>;
+  if(view==="success"&&orderResult)return <SuccessScreen order={orderResult} onReset={reset} onViewHistory={loggedInUser?.sessionToken?()=>setView("history"):null}/>;
+  if(view==="history"&&loggedInUser?.sessionToken)return <MyOrdersScreen userId={loggedInUser.id} sessionToken={loggedInUser.sessionToken} menu={menu} onBack={()=>setView(orderResult?"success":"menu")} onReorder={(items,dropped)=>{setCart(items);if(dropped>0)setAuthErr(dropped+" item(s) no longer available");setView("cart");}}/>;
 
   return(
     <div className="kiosk-root" style={{minHeight:"100vh",background:C.bg,fontFamily:F.body,color:C.cream,display:"flex",flexDirection:"column"}}>
@@ -323,8 +378,8 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           {view==="cart"&&<KioskBtn ghost onClick={()=>setView("menu")}>{"\u2190"} Menu</KioskBtn>}
           {view==="checkout"&&<KioskBtn ghost onClick={()=>{setView("cart");resetAuth();}}>{"\u2190"} Cart</KioskBtn>}
-          {view==="menu"&&<button onClick={()=>cartQty>0&&setView("cart")} className="touch-active" style={{background:cartQty>0?C.red:C.border,border:"none",color:C.cream,borderRadius:12,padding:"12px 20px",fontFamily:F.body,fontSize:15,fontWeight:600,cursor:cartQty>0?"pointer":"default",display:"flex",alignItems:"center",gap:8,position:"relative",transition:"background .2s",minHeight:48}}>Cart {cartQty>0?"("+cartQty+")":"Empty"}{cartQty>0&&<span style={{position:"absolute",top:-8,right:-8,background:C.cream,color:C.red,borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>{cartQty}</span>}</button>}
-          <button className="touch-active" onClick={onExit} style={{background:"transparent",border:"1px solid "+C.border,color:C.muted,borderRadius:10,padding:"10px 14px",cursor:"pointer",fontFamily:F.body,fontSize:13,minHeight:44}}>Exit</button>
+          {view==="menu"&&<button type="button" onClick={()=>cartQty>0&&setView("cart")} className="touch-active" style={{background:cartQty>0?C.red:C.border,border:"none",color:C.cream,borderRadius:12,padding:"12px 20px",fontFamily:F.body,fontSize:15,fontWeight:600,cursor:cartQty>0?"pointer":"default",display:"flex",alignItems:"center",gap:8,position:"relative",transition:"background .2s",minHeight:48}}>Cart {cartQty>0?"("+cartQty+")":"Empty"}{cartQty>0&&<span style={{position:"absolute",top:-8,right:-8,background:C.cream,color:C.red,borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>{cartQty}</span>}</button>}
+          <button type="button" className="touch-active" onClick={onExit} style={{background:"transparent",border:"1px solid "+C.border,color:C.muted,borderRadius:10,padding:"10px 14px",cursor:"pointer",fontFamily:F.body,fontSize:13,minHeight:44}}>Exit</button>
         </div>
       </header>
       <CutoffBanner/>
@@ -333,10 +388,10 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
       {view==="menu"&&(
         <div style={{flex:1,padding:"clamp(14px, 3vw, 20px) clamp(14px, 3vw, 24px)",animation:"fadeUp .3s ease"}}>
           <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>{cats.map(cat=><button key={cat} onClick={()=>setActiveCat(cat)} className="touch-active" style={{background:activeCat===cat?C.red:"transparent",color:activeCat===cat?C.cream:C.muted,border:"1px solid "+(activeCat===cat?C.red:C.border),borderRadius:24,padding:"10px 20px",cursor:"pointer",fontFamily:F.display,fontSize:13,fontWeight:600,transition:"all .18s",minHeight:44,whiteSpace:"nowrap"}}>{cat}</button>)}</div>
-            <button onClick={()=>setHideOOS(h=>!h)} className="touch-active" style={{background:hideOOS?C.surface:"transparent",border:"1px solid "+(hideOOS?C.borderMid:C.border),color:hideOOS?C.cream:C.muted,borderRadius:24,padding:"8px 16px",cursor:"pointer",fontFamily:F.display,fontSize:13,minHeight:44,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>{hideOOS?"\u2713 ":""}Hide Out of Stock</button>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>{cats.map(cat=><button type="button" key={cat} onClick={()=>setActiveCat(cat)} className="touch-active" style={{background:activeCat===cat?C.red:"transparent",color:activeCat===cat?C.cream:C.muted,border:"1px solid "+(activeCat===cat?C.red:C.border),borderRadius:24,padding:"10px 20px",cursor:"pointer",fontFamily:F.display,fontSize:13,fontWeight:600,transition:"all .18s",minHeight:44,whiteSpace:"nowrap"}}>{cat}</button>)}</div>
+            <button type="button" onClick={()=>setHideOOS(h=>!h)} className="touch-active" style={{background:hideOOS?C.surface:"transparent",border:"1px solid "+(hideOOS?C.borderMid:C.border),color:hideOOS?C.cream:C.muted,borderRadius:24,padding:"8px 16px",cursor:"pointer",fontFamily:F.display,fontSize:13,minHeight:44,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>{hideOOS?"\u2713 ":""}Hide Out of Stock</button>
           </div>
-          {filtered.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.muted}}><div style={{fontSize:48,marginBottom:16,opacity:.4}}></div><div style={{fontSize:20,marginBottom:12,fontFamily:F.display}}>No items in this category</div><button onClick={()=>{setActiveCat("All");setHideOOS(false);}} className="touch-active" style={{background:C.red,border:"none",color:C.cream,borderRadius:12,padding:"14px 28px",fontFamily:F.display,fontSize:16,cursor:"pointer",marginTop:8}}>Show All Items</button></div>
+          {filtered.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.muted}}><div style={{fontSize:48,marginBottom:16,opacity:.4}}></div><div style={{fontSize:20,marginBottom:12,fontFamily:F.display}}>No items in this category</div><button type="button" onClick={()=>{setActiveCat("All");setHideOOS(false);}} className="touch-active" style={{background:C.red,border:"none",color:C.cream,borderRadius:12,padding:"14px 28px",fontFamily:F.display,fontSize:16,cursor:"pointer",marginTop:8}}>Show All Items</button></div>
           :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%, 280px),1fr))",gap:"clamp(12px, 2vw, 18px)"}}>{filtered.map((item,idx)=><KioskCard key={item.id} item={item} idx={idx} hov={hovered===item.id} onHover={setHovered} onClick={()=>{if(item.inStock){setSelected(item);setQty(1);}}}/>)}</div>}
         </div>
       )}
@@ -349,7 +404,7 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
             {cart.length===0?<div style={{textAlign:"center",padding:"70px 0",color:C.muted}}><div style={{fontSize:52,marginBottom:16,opacity:.4}}></div><div style={{fontSize:20,marginBottom:24,fontFamily:F.display}}>Your cart is empty</div><KioskBtn primary onClick={()=>setView("menu")}>{"\u2190"} Browse Menu</KioskBtn></div>:(
               <>
                 <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:22}}>
-                  {cart.map(item=><div key={item.id} style={{...GLASS_MODAL,borderRadius:14,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Img src={item.image} alt={item.name} style={{width:62,height:62,objectFit:"cover",borderRadius:10,flexShrink:0}}/><div style={{flex:1,minWidth:120}}><div style={{fontFamily:F.display,fontSize:16,color:C.cream,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div><div style={{fontSize:13,color:C.muted,marginTop:2}}>${item.price.toFixed(2)} each</div></div><div style={{display:"flex",alignItems:"center",gap:6,background:C.card,borderRadius:12,padding:4,border:"1px solid "+C.border}}><KQtyBtn onClick={()=>setCart(p=>p.map(c=>c.id===item.id?{...c,quantity:Math.max(1,c.quantity-1)}:c))}>{"\u2212"}</KQtyBtn><span style={{fontFamily:F.display,fontSize:18,fontWeight:700,minWidth:28,textAlign:"center",color:C.cream}}>{item.quantity}</span><KQtyBtn onClick={()=>setCart(p=>p.map(c=>c.id===item.id?{...c,quantity:Math.min(MAX_ITEM_QTY,c.quantity+1)}:c))} disabled={item.quantity>=MAX_ITEM_QTY}>+</KQtyBtn></div><div style={{fontFamily:F.display,fontSize:18,color:C.red,minWidth:68,textAlign:"right",flexShrink:0}}>${(item.price*item.quantity).toFixed(2)}</div><button onClick={()=>setCart(p=>p.filter(c=>c.id!==item.id))} className="touch-active" style={{background:C.errorBg,border:"none",color:C.errorText,cursor:"pointer",fontSize:15,width:40,height:40,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{"\u2715"}</button></div>)}
+                  {cart.map(item=>{const maxQty=getMaxQtyForItem(item.id,item.stock);return <div key={item.id} style={{...GLASS_MODAL,borderRadius:14,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Img src={item.image} alt={item.name} style={{width:62,height:62,objectFit:"cover",borderRadius:10,flexShrink:0}}/><div style={{flex:1,minWidth:120}}><div style={{fontFamily:F.display,fontSize:16,color:C.cream,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div><div style={{fontSize:13,color:C.muted,marginTop:2}}>${item.price.toFixed(2)} each</div></div><div style={{display:"flex",alignItems:"center",gap:6,background:C.card,borderRadius:12,padding:4,border:"1px solid "+C.border}}><KQtyBtn onClick={()=>setCart(p=>p.map(c=>c.id===item.id?{...c,quantity:Math.max(1,c.quantity-1)}:c))}>{"\u2212"}</KQtyBtn><span style={{fontFamily:F.display,fontSize:18,fontWeight:700,minWidth:28,textAlign:"center",color:C.cream}}>{item.quantity}</span><KQtyBtn onClick={()=>setCart(p=>p.map(c=>c.id===item.id?{...c,quantity:Math.min(maxQty,c.quantity+1)}:c))} disabled={item.quantity>=maxQty}>+</KQtyBtn></div><div style={{fontFamily:F.display,fontSize:18,color:C.red,minWidth:68,textAlign:"right",flexShrink:0}}>${(item.price*item.quantity).toFixed(2)}</div><button type="button" aria-label={`Remove ${item.name} from cart`} onClick={()=>setCart(p=>p.filter(c=>c.id!==item.id))} className="touch-active" style={{background:C.errorBg,border:"none",color:C.errorText,cursor:"pointer",fontSize:15,width:40,height:40,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{"\u2715"}</button></div>;})}
                 </div>
                 <div style={{...GLASS_MODAL,borderRadius:16,padding:"clamp(16px, 3vw, 22px) clamp(18px, 3vw, 26px)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",marginBottom:12,fontSize:15}}><span style={{color:C.muted}}>Subtotal ({cartQty} item{cartQty!==1?"s":""})</span><span style={{color:C.cream}}>${cartTotal.toFixed(2)}</span></div>
@@ -374,7 +429,7 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
             {!isOrderingOpen()&&<div style={{background:"rgba(217,119,6,.12)",border:"1px solid rgba(217,119,6,.3)",borderRadius:12,padding:"12px 16px",marginBottom:20,fontSize:13,color:"#fbbf24",lineHeight:1.5}}>Orders placed after Wednesday 3:00 PM are delivered the following Friday.</div>}
             <div style={{display:"flex",flexDirection:"column",gap:12}}>
               <KioskBtn primary fullWidth large onClick={()=>{setShowDeliveryConfirm(false);setView("checkout");}}>Continue to Checkout {"\u2192"}</KioskBtn>
-              <button onClick={()=>setShowDeliveryConfirm(false)} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:14,padding:8}}>{"\u2190"} Back to Cart</button>
+              <button type="button" onClick={()=>setShowDeliveryConfirm(false)} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:14,padding:8}}>{"\u2190"} Back to Cart</button>
             </div>
           </div>
         </div>
@@ -404,9 +459,9 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
 
             <div style={{fontSize:13,color:C.muted,textAlign:"center",marginBottom:20}}>Sign in to your account or create a new one to place your order</div>
             <div style={{display:"flex",flexDirection:"column",gap:14}}>
-              <button onClick={()=>setAuthMode("login")} className="touch-active" style={{width:"100%",background:C.red,border:"none",color:C.cream,borderRadius:14,padding:"18px 20px",fontSize:18,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,boxShadow:"0 8px 32px "+C.redGlow,transition:"transform .15s"}}>Sign In</button>
-              <button onClick={()=>setAuthMode("register")} className="touch-active" style={{width:"100%",background:"transparent",border:"2px solid "+C.borderMid,color:C.cream,borderRadius:14,padding:"18px 20px",fontSize:18,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,transition:"all .15s"}}>Create New Account</button>
-              <button onClick={()=>setView("cart")} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:14,marginTop:8}}>{"\u2190"} Back to Cart</button>
+              <button type="button" onClick={()=>setAuthMode("login")} className="touch-active" style={{width:"100%",background:C.red,border:"none",color:C.cream,borderRadius:14,padding:"18px 20px",fontSize:18,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,boxShadow:"0 8px 32px "+C.redGlow,transition:"transform .15s"}}>Sign In</button>
+              <button type="button" onClick={()=>setAuthMode("register")} className="touch-active" style={{width:"100%",background:"transparent",border:"2px solid "+C.borderMid,color:C.cream,borderRadius:14,padding:"18px 20px",fontSize:18,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,transition:"all .15s"}}>Create New Account</button>
+              <button type="button" onClick={()=>setView("cart")} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:14,marginTop:8}}>{"\u2190"} Back to Cart</button>
             </div>
           </div>
         </div>
@@ -424,21 +479,21 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
                   <div style={{fontFamily:F.display,fontSize:18,fontWeight:900,letterSpacing:2,color:C.cream}}>SIGN IN</div>
                   <div style={{fontSize:13,color:C.muted,marginTop:4}}>Enter your email & password to place order</div>
                 </div>
-                <div style={{marginBottom:12}}>
-                  <input type="email" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthErr("");}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Email address" autoCapitalize="none" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                </div>
-                <div style={{marginBottom:14,position:"relative"}}>
-                  <input type={showLoginPass?"text":"password"} value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthErr("");}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Password" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                  <button onClick={()=>setShowLoginPass(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:18,lineHeight:1,padding:"4px"}}>{showLoginPass?"\u{1F648}":"\u{1F441}"}</button>
-                </div>
+                <KioskField htmlFor="kiosk-login-email" label="Email" style={{marginBottom:12}}>
+                  <input id="kiosk-login-email" type="email" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthErr("");}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Email address" autoCapitalize="none" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                </KioskField>
+                <KioskField htmlFor="kiosk-login-password" label="Password" style={{marginBottom:14,position:"relative"}}>
+                  <input id="kiosk-login-password" type={showLoginPass?"text":"password"} value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthErr("");}} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="Password" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  <button type="button" aria-label={showLoginPass?"Hide password":"Show password"} onClick={()=>setShowLoginPass(p=>!p)} style={{position:"absolute",right:12,top:"calc(50% + 9px)",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:18,lineHeight:1,padding:"4px"}}>{showLoginPass?"Hide":"Show"}</button>
+                </KioskField>
                 {authErr&&<div style={{background:authErr.startsWith("Password updated")?"rgba(22,101,52,.2)":C.errorBg,color:authErr.startsWith("Password updated")?C.greenText:C.errorText,border:"1px solid "+(authErr.startsWith("Password updated")?"rgba(74,222,128,.2)":"transparent"),borderRadius:8,padding:"9px 14px",fontSize:13,marginBottom:12}}>{authErr}</div>}
-                <button onClick={handleLogin} disabled={authLoading||!authEmail.trim()||!authPass} className="touch-active" style={{width:"100%",background:authEmail.trim()&&authPass?C.red:C.border,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:authEmail.trim()&&authPass?"pointer":"default",fontFamily:F.display,letterSpacing:1,opacity:authEmail.trim()&&authPass?1:.5,transition:"all .2s",minHeight:52,boxShadow:authEmail.trim()&&authPass?"0 6px 28px "+C.redGlow:"none"}}>{authLoading?"Signing in...":"Place Order"}</button>
+                <button type="button" onClick={handleLogin} disabled={authLoading||!authEmail.trim()||!authPass} className="touch-active" style={{width:"100%",background:authEmail.trim()&&authPass?C.red:C.border,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:authEmail.trim()&&authPass?"pointer":"default",fontFamily:F.display,letterSpacing:1,opacity:authEmail.trim()&&authPass?1:.5,transition:"all .2s",minHeight:52,boxShadow:authEmail.trim()&&authPass?"0 6px 28px "+C.redGlow:"none"}}>{authLoading?"Signing in...":"Place Order"}</button>
                 <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <button onClick={()=>{setAuthMode("reset");setResetEmail(authEmail);setResetErr("");setResetStep(1);}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13,textDecoration:"underline",padding:0}}>Forgot password?</button>
+                  <button type="button" onClick={()=>{setAuthMode("reset");setResetEmail(authEmail);setResetErr("");setResetStep(1);}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13,textDecoration:"underline",padding:0}}>Forgot password?</button>
                   <span style={{fontSize:13,color:C.border}}>Total: <span style={{color:C.muted,fontWeight:600}}>${cartTotal.toFixed(2)}</span></span>
                 </div>
                 <div style={{marginTop:14,textAlign:"center"}}>
-                  <button onClick={()=>{setAuthMode("choose");setAuthErr("");}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13}}>{"\u2190"} Back</button>
+                  <button type="button" onClick={()=>{setAuthMode("choose");setAuthErr("");}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13}}>{"\u2190"} Back</button>
                 </div>
               </div>
             )}
@@ -453,28 +508,28 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
                 </div>
 
                 {resetStep===1&&<>
-                  <div style={{marginBottom:12}}>
-                    <input type="email" value={resetEmail} onChange={e=>{setResetEmail(e.target.value);setResetErr("");}} placeholder="Email address" autoCapitalize="none" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                  </div>
-                  <div style={{marginBottom:14}}>
-                    <input type="tel" value={resetPhone} onChange={e=>{setResetPhone(e.target.value);setResetErr("");}} placeholder="Phone number on file" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                  </div>
+                  <KioskField htmlFor="kiosk-reset-email" label="Email" style={{marginBottom:12}}>
+                    <input id="kiosk-reset-email" type="email" value={resetEmail} onChange={e=>{setResetEmail(e.target.value);setResetErr("");}} placeholder="Email address" autoCapitalize="none" autoComplete="off" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  </KioskField>
+                  <KioskField htmlFor="kiosk-reset-phone" label="Phone Number" style={{marginBottom:14}}>
+                    <input id="kiosk-reset-phone" type="tel" value={resetPhone} onChange={e=>{setResetPhone(e.target.value);setResetErr("");}} placeholder="Phone number on file" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  </KioskField>
                   {resetErr&&<div style={{background:C.errorBg,color:C.errorText,borderRadius:8,padding:"9px 14px",fontSize:13,marginBottom:12}}>{resetErr}</div>}
-                  <button onClick={handleResetVerify} className="touch-active" style={{width:"100%",background:resetEmail.trim()&&resetPhone.trim()?C.red:C.border,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:resetEmail.trim()&&resetPhone.trim()?"pointer":"default",fontFamily:F.display,letterSpacing:1,opacity:resetEmail.trim()&&resetPhone.trim()?1:.5,transition:"all .2s",minHeight:52}}>Verify Identity</button>
+                  <button type="button" onClick={handleResetVerify} className="touch-active" style={{width:"100%",background:resetEmail.trim()&&resetPhone.trim()?C.red:C.border,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:resetEmail.trim()&&resetPhone.trim()?"pointer":"default",fontFamily:F.display,letterSpacing:1,opacity:resetEmail.trim()&&resetPhone.trim()?1:.5,transition:"all .2s",minHeight:52}}>Verify Identity</button>
                 </>}
 
                 {resetStep===2&&<>
                   <div style={{background:"rgba(22,101,52,.15)",border:"1px solid rgba(74,222,128,.2)",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:C.greenText,textAlign:"center"}}>{"\u2713"} Identity verified. Enter your new password below.</div>
-                  <div style={{marginBottom:14,position:"relative"}}>
-                    <input type={showResetPass?"text":"password"} value={resetNewPass} onChange={e=>{setResetNewPass(e.target.value);setResetErr("");}} placeholder="New password (min 8 characters)" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                    <button onClick={()=>setShowResetPass(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:18,lineHeight:1,padding:"4px"}}>{showResetPass?"\u{1F648}":"\u{1F441}"}</button>
-                  </div>
+                  <KioskField htmlFor="kiosk-reset-password" label="New Password" style={{marginBottom:14,position:"relative"}}>
+                    <input id="kiosk-reset-password" type={showResetPass?"text":"password"} value={resetNewPass} onChange={e=>{setResetNewPass(e.target.value);setResetErr("");}} placeholder="New password (min 8 characters)" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                    <button type="button" aria-label={showResetPass?"Hide password":"Show password"} onClick={()=>setShowResetPass(p=>!p)} style={{position:"absolute",right:12,top:"calc(50% + 9px)",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:18,lineHeight:1,padding:"4px"}}>{showResetPass?"Hide":"Show"}</button>
+                  </KioskField>
                   {resetErr&&<div style={{background:C.errorBg,color:C.errorText,borderRadius:8,padding:"9px 14px",fontSize:13,marginBottom:12}}>{resetErr}</div>}
-                  <button onClick={handleResetPassword} disabled={resetLoading} className="touch-active" style={{width:"100%",background:resetNewPass.length>=8?C.green:C.border,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:resetNewPass.length>=8?"pointer":"default",fontFamily:F.display,letterSpacing:1,opacity:resetNewPass.length>=8?1:.5,transition:"all .2s",minHeight:52}}>{resetLoading?"Updating...":"Set New Password"}</button>
+                  <button type="button" onClick={handleResetPassword} disabled={resetLoading} className="touch-active" style={{width:"100%",background:resetNewPass.length>=8?C.green:C.border,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:resetNewPass.length>=8?"pointer":"default",fontFamily:F.display,letterSpacing:1,opacity:resetNewPass.length>=8?1:.5,transition:"all .2s",minHeight:52}}>{resetLoading?"Updating...":"Set New Password"}</button>
                 </>}
 
                 <div style={{marginTop:14,textAlign:"center"}}>
-                  <button onClick={()=>{setAuthMode("login");setResetErr("");setResetStep(1);}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13}}>{"\u2190"} Back to Sign In</button>
+                  <button type="button" onClick={()=>{setAuthMode("login");setResetErr("");setResetStep(1);}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13}}>{"\u2190"} Back to Sign In</button>
                 </div>
               </div>
             )}
@@ -488,30 +543,33 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
                   <div style={{fontSize:13,color:C.muted,marginTop:4}}>Fill in your info to get started</div>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-                  <input value={regFirst} onChange={e=>setRegFirst(e.target.value)} placeholder="First Name" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                  <input value={regLast} onChange={e=>setRegLast(e.target.value)} placeholder="Last Name" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  <KioskField htmlFor="kiosk-register-first" label="First Name">
+                    <input id="kiosk-register-first" value={regFirst} onChange={e=>setRegFirst(e.target.value)} placeholder="First name" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  </KioskField>
+                  <KioskField htmlFor="kiosk-register-last" label="Last Name">
+                    <input id="kiosk-register-last" value={regLast} onChange={e=>setRegLast(e.target.value)} placeholder="Last name" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  </KioskField>
                 </div>
-                <div style={{marginBottom:10}}>
-                  <input type="email" value={regEmail} onChange={e=>setRegEmail(e.target.value)} placeholder="Email address" autoCapitalize="none" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                </div>
-                <div style={{marginBottom:10}}>
-                  <input type="tel" value={regPhone} onChange={e=>setRegPhone(e.target.value)} placeholder="Phone number" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                </div>
-                <div style={{marginBottom:10,position:"relative"}}>
-                  <input type={showRegPass?"text":"password"} value={regPass} onChange={e=>setRegPass(e.target.value)} placeholder="Create a password" autoComplete="new-password" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
-                  <button onClick={()=>setShowRegPass(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:18,lineHeight:1,padding:"4px"}}>{showRegPass?"\u{1F648}":"\u{1F441}"}</button>
-                </div>
-                <div style={{marginBottom:14}}>
-                  <div style={{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:C.muted,marginBottom:6}}>Delivery Location</div>
-                  <select value={regLocation} onChange={e=>setRegLocation(e.target.value)} style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}>
+                <KioskField htmlFor="kiosk-register-email" label="Email" style={{marginBottom:10}}>
+                  <input id="kiosk-register-email" type="email" value={regEmail} onChange={e=>setRegEmail(e.target.value)} placeholder="Email address" autoCapitalize="none" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                </KioskField>
+                <KioskField htmlFor="kiosk-register-phone" label="Phone Number" style={{marginBottom:10}}>
+                  <input id="kiosk-register-phone" type="tel" value={regPhone} onChange={e=>setRegPhone(e.target.value)} placeholder="Phone number" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                </KioskField>
+                <KioskField htmlFor="kiosk-register-password" label="Password" style={{marginBottom:10,position:"relative"}}>
+                  <input id="kiosk-register-password" type={showRegPass?"text":"password"} value={regPass} onChange={e=>setRegPass(e.target.value)} placeholder="Create a password" autoComplete="new-password" style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 44px 12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}/>
+                  <button type="button" aria-label={showRegPass?"Hide password":"Show password"} onClick={()=>setShowRegPass(p=>!p)} style={{position:"absolute",right:12,top:"calc(50% + 9px)",transform:"translateY(-50%)",background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:18,lineHeight:1,padding:"4px"}}>{showRegPass?"Hide":"Show"}</button>
+                </KioskField>
+                <KioskField htmlFor="kiosk-register-location" label="Delivery Location" style={{marginBottom:14}}>
+                  <select id="kiosk-register-location" value={regLocation} onChange={e=>setRegLocation(e.target.value)} style={{width:"100%",background:C.card,border:"1px solid "+C.borderMid,borderRadius:10,padding:"12px 14px",color:C.cream,fontFamily:F.body,fontSize:15}}>
                     {DELIVERY_LOCATIONS.map(loc=><option key={loc} value={loc}>{loc}</option>)}
                   </select>
-                </div>
+                </KioskField>
                 {regErr&&<div style={{background:C.errorBg,color:C.errorText,borderRadius:8,padding:"9px 14px",fontSize:13,marginBottom:12}}>{regErr}</div>}
-                <button onClick={handleRegister} disabled={regLoading} className="touch-active" style={{width:"100%",background:C.red,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,minHeight:52,boxShadow:"0 6px 28px "+C.redGlow,opacity:regLoading?.6:1}}>{regLoading?"Creating account...":"Create Account & Place Order"}</button>
+                <button type="button" onClick={handleRegister} disabled={regLoading} className="touch-active" style={{width:"100%",background:C.red,border:"none",color:C.cream,borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:F.display,letterSpacing:1,minHeight:52,boxShadow:"0 6px 28px "+C.redGlow,opacity:regLoading ? 0.6 : 1}}>{regLoading?"Creating account...":"Create Account & Place Order"}</button>
                 <div style={{marginTop:12,fontSize:13,color:C.border,textAlign:"center"}}>Order total: <span style={{color:C.muted,fontWeight:600}}>${cartTotal.toFixed(2)}</span></div>
                 <div style={{marginTop:14,textAlign:"center"}}>
-                  <button onClick={()=>{setAuthMode("choose");setRegErr("");}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13}}>{"\u2190"} Back</button>
+                  <button type="button" onClick={()=>{setAuthMode("choose");setRegErr("");}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontFamily:F.body,fontSize:13}}>{"\u2190"} Back</button>
                 </div>
               </div>
             )}
@@ -521,15 +579,15 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
 
       {selected&&(
         <div onClick={()=>setSelected(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:16,animation:"fadeIn .2s ease"}}>
-          <div onClick={e=>e.stopPropagation()} style={{...GLASS_MODAL,borderRadius:20,overflow:"hidden",width:450,maxWidth:"100%",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 32px 80px rgba(0,0,0,.7)",animation:"scaleIn .22s ease"}}>
+          <div role="dialog" aria-modal="true" aria-labelledby="kiosk-item-title" onClick={e=>e.stopPropagation()} style={{...GLASS_MODAL,borderRadius:20,overflow:"hidden",width:450,maxWidth:"100%",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 32px 80px rgba(0,0,0,.7)",animation:"scaleIn .22s ease"}}>
             <div style={{position:"relative",height:"clamp(180px, 35vw, 240px)"}}>
               <Img src={selected.image} alt={selected.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
               <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(15,13,11,.92),transparent 50%)"}}/>
-              <button onClick={()=>setSelected(null)} className="touch-active" style={{position:"absolute",top:14,right:14,background:"rgba(0,0,0,.5)",backdropFilter:"blur(10px)",border:"none",color:C.cream,borderRadius:"50%",width:42,height:42,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}}>{"\u2715"}</button>
+              <button type="button" aria-label="Close item details" onClick={()=>setSelected(null)} className="touch-active" style={{position:"absolute",top:14,right:14,background:"rgba(0,0,0,.5)",backdropFilter:"blur(10px)",border:"none",color:C.cream,borderRadius:"50%",width:42,height:42,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}}>{"\u2715"}</button>
               <div style={{position:"absolute",top:14,left:14,background:"rgba(22,101,52,.85)",backdropFilter:"blur(8px)",color:C.greenText,borderRadius:7,padding:"4px 12px",fontSize:11,fontWeight:700,letterSpacing:2,textTransform:"uppercase"}}>In Stock</div>
             </div>
             <div style={{padding:"clamp(16px, 3vw, 22px) clamp(18px, 3vw, 24px)"}}>
-              <div style={{fontFamily:F.display,fontSize:"clamp(20px, 4vw, 26px)",fontWeight:700,color:C.cream,marginBottom:6}}>{selected.name}{selected.isBundle&&<span style={{background:"#1e40af",color:"#fff",fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:5,marginLeft:10,letterSpacing:1,verticalAlign:"middle"}}>BUNDLE</span>}</div>
+              <div id="kiosk-item-title" style={{fontFamily:F.display,fontSize:"clamp(20px, 4vw, 26px)",fontWeight:700,color:C.cream,marginBottom:6}}>{selected.name}{selected.isBundle&&<span style={{background:"#1e40af",color:"#fff",fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:5,marginLeft:10,letterSpacing:1,verticalAlign:"middle"}}>BUNDLE</span>}</div>
               {selected.isBundle && selected.description && selected.description.includes("|")
                 ? <div style={{background:C.card,borderRadius:10,padding:"10px 14px",marginBottom:14,border:"1px solid "+C.border}}>
                     <div style={{fontSize:11,color:C.muted,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Includes:</div>
@@ -541,7 +599,7 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
               {(()=>{const maxQty=(selected.stock!==null&&selected.stock!==undefined)?Math.min(MAX_ITEM_QTY,selected.stock):MAX_ITEM_QTY;return(<>
               <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:18,background:C.card,borderRadius:12,padding:5,width:"fit-content",border:"1px solid "+C.border}}><KQtyBtn large onClick={()=>setQty(q=>Math.max(1,q-1))}>{"\u2212"}</KQtyBtn><span style={{minWidth:56,textAlign:"center",fontFamily:F.display,fontSize:24,fontWeight:700,color:C.cream}}>{qty}</span><KQtyBtn large onClick={()=>setQty(q=>Math.min(maxQty,q+1))} disabled={qty>=maxQty}>+</KQtyBtn></div>
               {qty>=maxQty&&<div style={{fontSize:12,color:C.amberText,marginBottom:10}}>Only {maxQty} available</div>}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}><div style={{color:C.muted,fontSize:15}}>Subtotal: <span style={{color:C.cream,fontWeight:600,fontSize:18}}>${(selected.price*qty).toFixed(2)}</span></div><button onClick={addToCart} className="touch-active" style={{background:justAdded?C.green:C.red,border:"none",color:C.cream,borderRadius:12,padding:"14px 28px",fontFamily:F.display,fontSize:16,fontWeight:700,cursor:"pointer",transition:"background .3s",minHeight:52,boxShadow:"0 4px 20px "+C.redGlow}}>{justAdded?"\u2713 Added!":"Add to Cart"}</button></div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}><div style={{color:C.muted,fontSize:15}}>Subtotal: <span style={{color:C.cream,fontWeight:600,fontSize:18}}>${(selected.price*qty).toFixed(2)}</span></div><button type="button" onClick={addToCart} className="touch-active" style={{background:justAdded?C.green:C.red,border:"none",color:C.cream,borderRadius:12,padding:"14px 28px",fontFamily:F.display,fontSize:16,fontWeight:700,cursor:"pointer",transition:"background .3s",minHeight:52,boxShadow:"0 4px 20px "+C.redGlow}}>{justAdded?"\u2713 Added!":"Add to Cart"}</button></div>
               </>);})()}
             </div>
           </div>
@@ -553,11 +611,9 @@ function KioskApp({ menu, users, categories, addOrder, dbOps, onExit }) {
 
 export default function KioskView() {
   const {menu,ready:menuReady}=useMenu();
-  const {users,ready:usersReady}=useUsers();
   const {categories:rawCats,ready:catsReady}=useCategories();
   const navigate=useNavigate();
   const categories=rawCats.map(c=>c.name);
-  const dbOps=createDbOps(menu,categories);
-  if(!menuReady||!usersReady||!catsReady)return <ModeLoadingScreen label="Loading kiosk..."/>;
-  return <KioskApp menu={menu} users={users} categories={categories} addOrder={dbOps.addOrder} dbOps={dbOps} onExit={()=>navigate("/")}/>;
+  if(!menuReady||!catsReady)return <ModeLoadingScreen label="Loading kiosk..."/>;
+  return <KioskApp menu={menu} categories={categories} onExit={()=>navigate("/")}/>;
 }

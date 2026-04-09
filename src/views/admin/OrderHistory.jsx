@@ -1,29 +1,36 @@
 import { useState, useRef, useEffect } from "react";
 import { useAdminTheme } from "../../context/AdminThemeContext";
-import { ORDER_STATUSES, normalizeStatus, canTransition } from "../../styles/tokens";
-import { StatusBadge, ConfirmModal, Btn, inputSt, openPrintWindow } from "../../components/ui";
+import { ORDER_STATUSES, normalizeStatus } from "../../styles/tokens";
+import { StatusBadge, ConfirmModal, Btn } from "../../components/ui";
+import {
+  inputSt,
+  openPrintWindow,
+  escapeHtml,
+  escapeAttribute,
+  toJsStringLiteral,
+} from "../../components/ui-helpers";
 import { Img } from "../../components/Img";
-import { addDoc, collection } from "firebase/firestore";
-import { db, CF_BASE } from "../../config/firebase";
+import { CF_BASE } from "../../config/firebase";
 
 function printPickTicket(order, menu, shopName = "Champ's Butcher Shop"){
     const items=order.items||[];const orderNum=String(order.orderNumber||"0000");
+    const safeShopName=escapeHtml(shopName);const safeOrderNumber=escapeHtml(order.orderNumber||"");const safeCustomer=escapeHtml(order.user||"Walk-in");const safeLocation=escapeHtml(order.deliveryLocation||"N/A");const safeDate=escapeHtml(order.ts?new Date(order.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"}):"");
     let itemsHtml="";let bcIdx=0;
-    items.forEach((i,idx)=>{
+    items.forEach((i)=>{
       const mi=(menu||[]).find(m=>m.name===i.name);const isBundle=mi&&mi.isBundle;const subs=(isBundle&&mi.bundleItems)||[];
       let h='<tr class="item-row"><td class="cb-col"><div class="cb"></div></td>';
       h+='<td class="qty-col">'+i.quantity+'</td>';
-      h+='<td class="name-col"><div class="item-name">'+i.name+(isBundle?' <span class="bundle-tag">BUNDLE</span>':'')+'</div>';
-      if(i.sku)h+='<div class="item-sku">SKU: '+i.sku+'</div>';
-      if(i.barcodeImage)h+='<div class="item-bc"><img src="'+i.barcodeImage+'" /></div>';
+      h+='<td class="name-col"><div class="item-name">'+escapeHtml(i.name)+(isBundle?' <span class="bundle-tag">BUNDLE</span>':'')+'</div>';
+      if(i.sku)h+='<div class="item-sku">SKU: '+escapeHtml(i.sku)+'</div>';
+      if(i.barcodeImage)h+='<div class="item-bc"><img src="'+escapeAttribute(i.barcodeImage)+'" /></div>';
       else if(i.sku){h+='<div class="item-bc"><svg id="item-bc-'+bcIdx+'"></svg></div>';bcIdx++;}
-      if(subs.length>0){h+='<div class="bundle-contents"><div class="bundle-hdr">Bundle contains:</div>';subs.forEach(b=>{const si=(menu||[]).find(m=>m.id===b.itemId);if(si){h+='<div class="sub-item"><span class="sub-name">'+si.name+'</span><span class="sub-qty"> x'+(b.quantity*i.quantity)+'</span></div>';if(si.sku)h+='<div class="sub-sku">SKU: '+si.sku+'</div>';}});h+='</div>';}
+      if(subs.length>0){h+='<div class="bundle-contents"><div class="bundle-hdr">Bundle contains:</div>';subs.forEach(b=>{const si=(menu||[]).find(m=>m.id===b.itemId);if(si){h+='<div class="sub-item"><span class="sub-name">'+escapeHtml(si.name)+'</span><span class="sub-qty"> x'+(b.quantity*i.quantity)+'</span></div>';if(si.sku)h+='<div class="sub-sku">SKU: '+escapeHtml(si.sku)+'</div>';}});h+='</div>';}
       h+='</td></tr>';
       itemsHtml+=h;
     });
-    const skuBcJs=items.map((i,idx)=>{if(i.sku&&!i.barcodeImage){const id=items.slice(0,idx).filter(x=>x.sku&&!x.barcodeImage).length;return'try{JsBarcode("#item-bc-'+id+'","'+i.sku+'",{format:"CODE128",width:1.6,height:30,displayValue:false,margin:0});}catch(e){console.warn("Barcode render failed:",e);}';}return'';}).filter(Boolean).join("");
-    const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Pick Ticket #${order.orderNumber||""}</title>
-<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+    const skuBcJs=items.map((i,idx)=>{if(i.sku&&!i.barcodeImage){const id=items.slice(0,idx).filter(x=>x.sku&&!x.barcodeImage).length;return`try{JsBarcode("#item-bc-${id}",${toJsStringLiteral(i.sku)},{format:"CODE128",width:1.6,height:30,displayValue:false,margin:0});}catch(e){console.warn("Barcode render failed:",e);}`;}return'';}).filter(Boolean).join("");
+    const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Pick Ticket #${safeOrderNumber}</title>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <style>
 @page{size:letter;margin:0.6in 0.75in}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -68,23 +75,23 @@ thead th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:
 </style></head><body>
 <div class="page">
 <div class="header">
-<div class="shop-name">${shopName}</div>
+<div class="shop-name">${safeShopName}</div>
 <div class="shop-sub">Halstead, KS</div>
 <div class="ticket-label">Pick Ticket</div>
-<div class="order-num">#${order.orderNumber||""}</div>
+<div class="order-num">#${safeOrderNumber}</div>
 <div class="order-barcode"><svg id="order-bc"></svg></div>
 </div>
 <div class="info">
-<div class="info-item"><div class="info-label">Customer</div><div class="info-value">${order.user||"Walk-in"}</div></div>
-<div class="info-item"><div class="info-label">Location</div><div class="info-value">${order.deliveryLocation||"N/A"}</div></div>
-<div class="info-item"><div class="info-label">Date</div><div class="info-value">${order.ts?new Date(order.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"}):""}</div></div>
+<div class="info-item"><div class="info-label">Customer</div><div class="info-value">${safeCustomer}</div></div>
+<div class="info-item"><div class="info-label">Location</div><div class="info-value">${safeLocation}</div></div>
+<div class="info-item"><div class="info-label">Date</div><div class="info-value">${safeDate}</div></div>
 <div class="info-item"><div class="info-label">Order Total</div><div class="info-value">$${(order.total||0).toFixed(2)}</div></div>
 </div>
 <table><thead><tr><th></th><th>Qty</th><th>Item</th></tr></thead><tbody>${itemsHtml}</tbody></table>
 <div class="summary"><div class="summary-count">${items.reduce((s,i)=>s+i.quantity,0)} total items &middot; ${items.length} line${items.length!==1?"s":""}</div></div>
 <div class="footer">Printed ${new Date().toLocaleString()}</div>
 </div>
-<script>window.onload=function(){try{JsBarcode("#order-bc","${orderNum}",{format:"CODE128",width:2.2,height:50,displayValue:false,margin:0});}catch(e){console.warn("Barcode render failed:",e);}${skuBcJs}window.print();};<\/script>
+<script>window.onload=function(){try{JsBarcode("#order-bc",${toJsStringLiteral(orderNum)},{format:"CODE128",width:2.2,height:50,displayValue:false,margin:0});}catch(e){console.warn("Barcode render failed:",e);}${skuBcJs}window.print();};</script>
 </body></html>`;
     openPrintWindow(html);
   }
@@ -92,11 +99,11 @@ thead th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:
 function OrderBarcode({value,small}){
   const{theme}=useAdminTheme();
   const svgRef=useRef(null);
-  useEffect(()=>{if(!svgRef.current||!value)return;const smallColor=theme==="light"?"#4a4540":"#e8dcc8";const opts={format:"CODE128",width:small?1.5:3,height:small?40:120,displayValue:true,fontSize:small?12:20,background:"transparent",lineColor:small?smallColor:"#000",textColor:small?smallColor:"#000",margin:small?4:10};const render=()=>{try{window.JsBarcode(svgRef.current,String(value),opts);}catch(e){console.error(e);}};if(!window.JsBarcode){const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js";s.onload=render;document.head.appendChild(s);}else{render();};},[value,small]);
+  useEffect(()=>{if(!svgRef.current||!value)return;const smallColor=theme==="light"?"#4a4540":"#e8dcc8";const opts={format:"CODE128",width:small?1.5:3,height:small?40:120,displayValue:true,fontSize:small?12:20,background:"transparent",lineColor:small?smallColor:"#000",textColor:small?smallColor:"#000",margin:small?4:10};const render=()=>{try{window.JsBarcode(svgRef.current,String(value),opts);}catch(e){console.error(e);}};if(!window.JsBarcode){const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js";s.onload=render;document.head.appendChild(s);}else{render();};},[theme, value, small]);
   return <svg ref={svgRef}/>;
 }
 
-export function OrderHistory({ orders, users, menu, dbOps, showToast, shopName }) {const{T:C,TF:F}=useAdminTheme();
+export function OrderHistory({ orders, menu, dbOps, showToast, shopName }) {const{T:C,TF:F}=useAdminTheme();
   const [search,setSearch]=useState("");const [expanded,setExpanded]=useState(null);const [confirmClear,setConfirmClear]=useState(false);const [view,setView]=useState("active");const [statusFilter,setStatusFilter]=useState("all");const [savingStatus,setSavingStatus]=useState(null);const [customerFilter,setCustomerFilter]=useState("all");const [scanBarcode,setScanBarcode]=useState(null);const [confirmCancel,setConfirmCancel]=useState(null);const [sendingInvoice,setSendingInvoice]=useState(null);const [retryingSync,setRetryingSync]=useState(null);
   const [selectMode,setSelectMode]=useState(false);const [selected,setSelected]=useState(new Set());const [bulkSaving,setBulkSaving]=useState(false);
   const QB_SEND_URL=`${CF_BASE}/qbSendInvoice`;const QB_RETRY_URL=`${CF_BASE}/qbRetrySyncOrder`;
@@ -117,7 +124,7 @@ export function OrderHistory({ orders, users, menu, dbOps, showToast, shopName }
     if(getStatus(order)==="paid"){setSavingStatus(order.id);try{await dbOps.updateOrder(order.id,{status:"picking"});showToast("Status \u2192 Picking");}catch(e){console.error(e);showToast("Status update failed","error");}finally{setSavingStatus(null);}}
   }
   async function toggleItemChecked(order,itemIndex){const checked=[...(order.checkedItems||[])];const pos=checked.indexOf(itemIndex);if(pos===-1)checked.push(itemIndex);else checked.splice(pos,1);try{await dbOps.updateOrder(order.id,{checkedItems:checked});}catch(e){console.error(e);}}
-  async function completeOrder(orderId){setSavingStatus(orderId);try{const order=orders.find(o=>o.id===orderId);const archivedAt=new Date().toISOString();await dbOps.updateOrder(orderId,{status:terminalStatus,archived:true,archivedAt});if(order?.user){const matchedUser=users.find(u=>((u.firstName||"")+" "+(u.lastName||"")).trim()===order.user||u.name===order.user);if(matchedUser){await addDoc(collection(db,"kioskUsers",matchedUser.id,"completedOrders"),{orderNumber:order.orderNumber||null,items:order.items||[],total:order.total||0,placedAt:order.ts||null,completedAt:archivedAt});}}showToast("Order completed");if(expanded===orderId)setExpanded(null);}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
+  async function completeOrder(orderId){setSavingStatus(orderId);try{const archivedAt=new Date().toISOString();await dbOps.updateOrder(orderId,{status:terminalStatus,archived:true,archivedAt,deliveredAt:archivedAt});showToast("Order completed");if(expanded===orderId)setExpanded(null);}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
   async function restoreOrder(orderId){setSavingStatus(orderId);try{await dbOps.updateOrder(orderId,{status:"picking",archived:false,archivedAt:null,checkedItems:[]});showToast("Order restored");}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
   async function cancelOrder(id){setSavingStatus(id);try{await dbOps.updateOrder(id,{status:"cancelled",cancelledAt:new Date().toISOString(),cancelledBy:"admin"});showToast("Order cancelled");setConfirmCancel(null);if(expanded===id)setExpanded(null);}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
   async function restoreCancelled(id){setSavingStatus(id);try{await dbOps.updateOrder(id,{status:"placed",cancelledAt:null,cancelledBy:null});showToast("Order restored");}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingStatus(null);}}
@@ -135,7 +142,7 @@ export function OrderHistory({ orders, users, menu, dbOps, showToast, shopName }
       <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" style={{...inputSt(false,C),flex:1,minWidth:200}}/><div style={{fontSize:13,color:C.muted}}>{filtered.length} order{filtered.length!==1?"s":""} {"\u00B7"} <span style={{color:C.red,fontFamily:F.display,fontSize:16}}>${totalRev.toFixed(2)}</span></div>{view==="active"&&active.length>0&&<><button onClick={()=>{setSelectMode(m=>!m);setSelected(new Set());}} style={{background:selectMode?C.surface:"transparent",border:"1px solid "+(selectMode?C.borderMid:C.border),color:selectMode?C.cream:C.muted,borderRadius:10,padding:"9px 14px",cursor:"pointer",fontFamily:F.body,fontSize:13,fontWeight:600}}>{selectMode?"Cancel":"Select"}</button>{selectMode&&selected.size>0&&!bulkSaving&&<><button onClick={()=>bulkAction("paid")} style={{background:"#1e3a5f",border:"1px solid #3b82f6",color:"#93c5fd",borderRadius:10,padding:"9px 14px",cursor:"pointer",fontFamily:F.body,fontSize:13,fontWeight:700}}>Mark Paid ({selected.size})</button><button onClick={()=>bulkAction("archive")} style={{background:C.amber,border:"1px solid "+C.amber,color:"#1c1400",borderRadius:10,padding:"9px 14px",cursor:"pointer",fontFamily:F.body,fontSize:13,fontWeight:700}}>Archive ({selected.size})</button></>}{bulkSaving&&<span style={{fontSize:13,color:C.muted}}>Processing...</span>}<button onClick={()=>setConfirmClear(true)} style={{background:C.amber,border:"1px solid "+C.amber,color:"#1c1400",borderRadius:10,padding:"9px 14px",cursor:"pointer",fontFamily:F.body,fontSize:13,fontWeight:700}}>Archive All</button></>}</div>
       {selectMode&&view==="active"&&<div style={{marginBottom:8}}><label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.muted}}><input type="checkbox" checked={selected.size===filtered.length&&filtered.length>0} onChange={toggleSelectAll} style={{accentColor:C.red,width:18,height:18}}/>Select All ({filtered.length})</label></div>}
       {filtered.length===0?<div style={{background:C.card,border:"1px solid "+C.border,borderRadius:14,padding:"60px",textAlign:"center",color:C.muted}}>{view==="archived"?"No archived orders":view==="cancelled"?"No cancelled orders":"No orders match your filters"}</div>:(
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>{filtered.map(order=>{const isExpanded=expanded===order.id;const checkedItems=order.checkedItems||[];const totalItems=order.items?.length||0;const allChecked=totalItems>0&&checkedItems.length===totalItems;const curStatus=getStatus(order);const orderCancelled=curStatus==="cancelled";const nextStatuses=ORDER_STATUSES.filter(s=>canTransition(curStatus,s.id));return(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>{filtered.map(order=>{const isExpanded=expanded===order.id;const checkedItems=order.checkedItems||[];const totalItems=order.items?.length||0;const allChecked=totalItems>0&&checkedItems.length===totalItems;const curStatus=getStatus(order);const orderCancelled=curStatus==="cancelled";return(
           <div key={order.id} style={{background:orderCancelled?"rgba(69,10,10,.15)":selected.has(order.id)?"rgba(127,29,29,.12)":C.card,border:"2px solid "+(orderCancelled?C.red+"44":selected.has(order.id)?C.red+"66":isExpanded?C.borderMid:C.border),borderRadius:12,overflow:"hidden",transition:"border .2s, background .2s",opacity:orderCancelled?.75:1}}>
             <div style={{padding:"12px 16px"}}><div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
               {selectMode&&!orderCancelled&&<input type="checkbox" checked={selected.has(order.id)} onChange={()=>toggleSelect(order.id)} style={{accentColor:C.red,width:20,height:20,flexShrink:0,cursor:"pointer"}}/>}

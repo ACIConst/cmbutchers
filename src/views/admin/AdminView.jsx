@@ -4,10 +4,10 @@
  * Admin panel shell — sidebar navigation + tab routing.
  * All tab components have been extracted to separate files.
  *
- * Auth: Firebase Auth (OperatorGate) + kioskUsers role check (Super Admin / manager).
+ * Auth: Firebase Auth (OperatorGate) + custom admin claims issued by backend.
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import {
   C as C_DARK, F as F_DARK, ADMIN_SESSION_MS,
   normalizeStatus,
@@ -15,12 +15,12 @@ import {
 import { AdminThemeProvider, useAdminTheme } from "../../context/AdminThemeContext";
 import {
   useMenu, useUsers, useOrders, useCategories,
-  createDbOps, runSeeds,
 } from "../../hooks/useFirestore";
+import { createDbOps, runSeeds } from "../../hooks/useAdminFirestore";
 import { useInventoryAdjustments } from "../../hooks/useInventoryAdjustments";
 import { useAuditLogs } from "../../hooks/useAuditLogs";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../../context/AuthContext";
+import { useAuth } from "../../hooks/useAuth";
 import { ModeLoadingScreen, ErrorBoundary } from "../../components/ui";
 
 import { getAuth, signOut } from "firebase/auth";
@@ -28,50 +28,34 @@ import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../config/firebase";
 
 // ─── Extracted tab components ────────────────────────────────────────────────
-import { AccessDenied } from "./AccessDenied";
-import { AdminDashboard } from "./AdminDashboard";
-import { MenuManager } from "./MenuManager";
-import { CategoriesManager } from "./CategoriesManager";
-import { UserManager } from "./UserManager";
-import { OrderHistory } from "./OrderHistory";
-import { DeliveryPanel } from "./DeliveryPanel";
-import { InventoryHistoryPanel } from "./InventoryHistoryPanel";
-import { AuditLogPanel } from "./AuditLogPanel";
-import { SettingsPanel } from "./SettingsPanel";
+const AccessDenied = lazy(() => import("./AccessDenied").then((m) => ({ default: m.AccessDenied })));
+const AdminDashboard = lazy(() => import("./AdminDashboard").then((m) => ({ default: m.AdminDashboard })));
+const MenuManager = lazy(() => import("./MenuManager").then((m) => ({ default: m.MenuManager })));
+const CategoriesManager = lazy(() => import("./CategoriesManager").then((m) => ({ default: m.CategoriesManager })));
+const UserManager = lazy(() => import("./UserManager").then((m) => ({ default: m.UserManager })));
+const OrderHistory = lazy(() => import("./OrderHistory").then((m) => ({ default: m.OrderHistory })));
+const DeliveryPanel = lazy(() => import("./DeliveryPanel").then((m) => ({ default: m.DeliveryPanel })));
+const InventoryHistoryPanel = lazy(() => import("./InventoryHistoryPanel").then((m) => ({ default: m.InventoryHistoryPanel })));
+const AuditLogPanel = lazy(() => import("./AuditLogPanel").then((m) => ({ default: m.AuditLogPanel })));
+const SettingsPanel = lazy(() => import("./SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
 
 // ─── Responsive hook ─────────────────────────────────────────────────────────
 function useWindowSize(){const [s,set]=useState({w:typeof window!=="undefined"?window.innerWidth:1200,h:typeof window!=="undefined"?window.innerHeight:800});useEffect(()=>{const h=()=>set({w:window.innerWidth,h:window.innerHeight});window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h);},[]);return s;}
 
 // ─── Main exported component ─────────────────────────────────────────────────
-export default function AdminView() {
+export default function AdminView({ initialTab = "dashboard" }) {
   const navigate = useNavigate();
-  const { menu, ready: menuReady }           = useMenu();
-  const { users, ready: usersReady }         = useUsers();
-  const { orders, ready: ordersReady }       = useOrders();
-  const { categories, ready: catsReady }     = useCategories();
-  const { adjustments, ready: adjustmentsReady } = useInventoryAdjustments();
-  const { auditLogs, ready: auditReady } = useAuditLogs();
-  const catNames = categories.map(c => c.name);
   useEffect(() => { if (import.meta.env.DEV) runSeeds(); }, []);
-  // Derive staff accounts from kioskUsers (roles that get admin panel access)
-  const STAFF_ROLES = ["Super Admin", "Manager", "Admin", "Employee", "manager", "super_admin"];
-  const seen = new Set();
-  const adminAccounts = users
-    .filter(u => STAFF_ROLES.includes(u.role))
-    .map(u => ({ ...u, name: ((u.firstName || "") + " " + (u.lastName || "")).trim() || u.email || "Unknown" }))
-    .filter(u => { const k = (u.email || u.id).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  const allReady = menuReady && usersReady && ordersReady && catsReady && adjustmentsReady && auditReady;
-  if (!allReady) return <ModeLoadingScreen label="Loading Admin Panel..." />;
-  return <AdminThemeProvider><AdminApp menu={menu} users={users} orders={orders} adminAccounts={adminAccounts} categories={categories} catNames={catNames} adjustments={adjustments} auditLogs={auditLogs} onExit={() => navigate("/")} /></AdminThemeProvider>;
+  return <AdminThemeProvider><AdminApp initialTab={initialTab} onExit={() => navigate("/")} /></AdminThemeProvider>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AdminApp — responsive sidebar + tab routing
 // ═══════════════════════════════════════════════════════════════════════════════
-function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, adjustments, auditLogs, onExit }) {
+function AdminApp({ initialTab, onExit }) {
   const { T: C, TF: F, theme, logoUrl, fontId } = useAdminTheme();
-  const { user, setAdmin } = useAuth();
-  const [tab, setTab] = useState("dashboard");
+  const { user, admin: loggedInAdmin } = useAuth();
+  const [tab, setTab] = useState(initialTab);
   const [toast, setToast] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const sessionTimerRef = useRef(null);
@@ -80,6 +64,27 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, ad
   const isMobile=w<768;
   const isTablet=w>=768&&w<1024;
   const showSidebarPermanent=w>=1024;
+  const tabFallback = <div style={{padding:isMobile?"24px 12px":"32px 20px",color:C.muted,fontFamily:F.body}}>Loading panel...</div>;
+  const needsMenu = ["dashboard", "menu", "categories", "orders"].includes(tab);
+  const needsUsers = ["dashboard", "users", "settings"].includes(tab);
+  const needsOrders = ["dashboard", "orders", "delivery"].includes(tab);
+  const needsCategories = ["menu", "categories", "settings"].includes(tab);
+  const needsAdjustments = tab === "inventory";
+  const needsAuditLogs = tab === "audit";
+  const { menu, ready: menuReady } = useMenu(needsMenu);
+  const { users, ready: usersReady } = useUsers(needsUsers);
+  const { orders, ready: ordersReady } = useOrders(needsOrders);
+  const { categories, ready: catsReady } = useCategories(needsCategories);
+  const { adjustments, ready: adjustmentsReady } = useInventoryAdjustments(300, needsAdjustments);
+  const { auditLogs, ready: auditReady } = useAuditLogs(300, needsAuditLogs);
+  const catNames = categories.map(c => c.name);
+  const STAFF_ROLES = ["Super Admin", "Manager", "Admin", "Employee", "manager", "super_admin"];
+  const seen = new Set();
+  const adminAccounts = users
+    .filter(u => STAFF_ROLES.includes(u.role))
+    .map(u => ({ ...u, name: ((u.firstName || "") + " " + (u.lastName || "")).trim() || u.email || "Unknown" }))
+    .filter(u => { const k = (u.email || u.id).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  const allReady = (!needsMenu || menuReady) && (!needsUsers || usersReady) && (!needsOrders || ordersReady) && (!needsCategories || catsReady) && (!needsAdjustments || adjustmentsReady) && (!needsAuditLogs || auditReady);
 
   // Load store info for dynamic shop name in pick tickets etc.
   useEffect(()=>{getDoc(doc(db,"kioskConfig","storeInfo")).then(snap=>{if(snap.exists())setStoreInfo(snap.data());}).catch(()=>{});},[]);
@@ -95,23 +100,8 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, ad
     const link=document.createElement("link");link.id=id;link.rel="stylesheet";link.href="https://fonts.googleapis.com/css2?family="+family+"&display=swap";document.head.appendChild(link);
   },[fontId]);
 
-  // Derive admin identity from Firebase Auth user + kioskUsers role
-  const ADMIN_ROLES = ["Super Admin", "Manager", "Admin", "manager", "super_admin"];
-  const kioskUser = users.find(u => u.email && u.email.toLowerCase() === user?.email?.toLowerCase());
-  const loggedInAdmin = useMemo(() => {
-    if (!kioskUser || !ADMIN_ROLES.includes(kioskUser.role)) return null;
-    return {
-      id: kioskUser.id,
-      name: ((kioskUser.firstName || "") + " " + (kioskUser.lastName || "")).trim() || user?.email,
-      role: kioskUser.role === "super_admin" ? "Super Admin" : kioskUser.role,
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kioskUser?.id, kioskUser?.role, user?.email]);
-
   const actor = loggedInAdmin ? { actorId: loggedInAdmin.id, actorName: loggedInAdmin.name } : {};
   const dbOps = createDbOps(menu, categories, actor);
-
-  useEffect(()=>{ setAdmin(loggedInAdmin); return ()=>setAdmin(null); },[loggedInAdmin, setAdmin]);
 
   function showToast(msg, type="success") { setToast({msg,type}); setTimeout(()=>setToast(null),3500); }
 
@@ -135,8 +125,13 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, ad
   const resetSessionTimer = useCallback(()=>{clearTimeout(sessionTimerRef.current);if(loggedInAdmin) sessionTimerRef.current=setTimeout(()=>{handleLogout();},ADMIN_SESSION_MS);},[loggedInAdmin,handleLogout]);
   useEffect(()=>{ resetSessionTimer(); return()=>clearTimeout(sessionTimerRef.current); },[resetSessionTimer]);
   useEffect(()=>{if(!loggedInAdmin)return;const events=["mousedown","keydown","touchstart"];events.forEach(e=>document.addEventListener(e,resetSessionTimer,{passive:true}));return()=>events.forEach(e=>document.removeEventListener(e,resetSessionTimer));},[resetSessionTimer,loggedInAdmin]);
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
-  if(!loggedInAdmin) return <AccessDenied email={user?.email} onLogout={handleLogout} onExit={onExit} />;
+  if (!allReady) return <ModeLoadingScreen label="Loading Admin Panel..." />;
+
+  if(!loggedInAdmin) return <Suspense fallback={tabFallback}><AccessDenied email={user?.email} onLogout={handleLogout} onExit={onExit} /></Suspense>;
 
   const isSuperAdmin=loggedInAdmin.role==="Super Admin";
   const deliveryCount=orders.filter(o=>!o.archived&&normalizeStatus(o.status)==="out_for_delivery").length;
@@ -208,15 +203,17 @@ function AdminApp({ menu, users, orders, adminAccounts, categories, catNames, ad
         </div>
         <div style={{padding:isMobile?"14px":isTablet?"20px":"26px"}}>
           <ErrorBoundary key={tab} t={C}>
+          <Suspense fallback={tabFallback}>
           {tab==="dashboard"  &&<AdminDashboard menu={menu} users={users} orders={orders} dbOps={dbOps} isMobile={isMobile} isTablet={isTablet}/>}
           {tab==="menu"       &&<MenuManager menu={menu} catNames={catNames} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
           {tab==="categories" &&<CategoriesManager categories={categories} menu={menu} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
           {tab==="users"      &&<UserManager users={users} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
-          {tab==="orders"     &&<OrderHistory orders={orders} users={users} menu={menu} dbOps={dbOps} showToast={showToast} shopName={storeInfo?.name}/>}
-          {tab==="delivery"   &&<DeliveryPanel orders={orders} users={users} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
+          {tab==="orders"     &&<OrderHistory orders={orders} menu={menu} dbOps={dbOps} showToast={showToast} shopName={storeInfo?.name}/>}
+          {tab==="delivery"   &&<DeliveryPanel orders={orders} dbOps={dbOps} showToast={showToast} isMobile={isMobile}/>}
           {tab==="inventory"&&isSuperAdmin&&<InventoryHistoryPanel adjustments={adjustments}/>}
           {tab==="audit"&&isSuperAdmin&&<AuditLogPanel auditLogs={auditLogs}/>}
           {tab==="settings"&&<SettingsPanel showToast={showToast} adminAccounts={adminAccounts} dbOps={dbOps} currentAdmin={loggedInAdmin} isSuperAdmin={isSuperAdmin} categories={categories}/>}
+          </Suspense>
           </ErrorBoundary>
         </div>
       </main>

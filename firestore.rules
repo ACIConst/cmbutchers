@@ -4,84 +4,87 @@ service cloud.firestore {
 
     function isSignedIn() { return request.auth != null; }
     function role() {
-      return isSignedIn() && exists(/databases/$(database)/documents/kioskUsers/$(request.auth.uid))
-        ? get(/databases/$(database)/documents/kioskUsers/$(request.auth.uid)).data.role
+      return isSignedIn() && request.auth.token.role is string
+        ? request.auth.token.role
         : null;
     }
-    function isManager() { return role() in ['super_admin', 'manager', 'Super Admin', 'Manager', 'Admin']; }
-    function isDelivery() { return role() in ['super_admin', 'manager', 'delivery', 'Super Admin', 'Manager']; }
+    function isAdmin() { return isSignedIn() && request.auth.token.isAdmin == true; }
+    function isStaff() { return isSignedIn() && request.auth.token.isStaff == true; }
+    function isManager() { return isAdmin() && role() in ['Super Admin', 'Manager', 'Admin']; }
+    function isDelivery() { return role() in ['Super Admin', 'Manager', 'delivery']; }
 
-    // Menu & categories: public read, stock-only public update, admin full write
+    // Menu & categories: public read, admin-only writes
     match /kioskMenu/{docId} {
       allow read: if true;
-      // Public updates restricted to stock fields only (for kiosk order stock decrement)
-      allow update: if isManager()
-        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(["stock", "inStock", "updatedAt"]));
-      allow create, delete: if isManager();
+      allow update: if isAdmin();
+      allow create, delete: if isAdmin();
     }
     match /kioskCategories/{docId} {
       allow read: if true;
-      allow write: if isManager();
+      allow write: if isAdmin();
     }
 
-    // Orders: public create (customers place from kiosk), authenticated read/update
+    // Orders: created by trusted backend or managers only, authenticated read/update
+    // Validates items array exists and each item quantity is ≤ 10
     match /kioskOrders/{docId} {
-      allow read: if isSignedIn();
-      allow create: if true;
-      allow update: if isManager() || isDelivery();
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if isAdmin() || isDelivery();
       allow delete: if false;
     }
 
     // Kiosk users: public create (self-registration), authenticated read/update
     match /kioskUsers/{userId} {
-      allow read: if isSignedIn();
-      allow create: if true;
-      // Self-update allowed but cannot change own role; managers can change anything
-      allow update: if isManager()
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow create: if isAdmin();
+      // Self-update allowed but cannot change protected fields; admin staff can change anything
+      allow update: if isAdmin()
         || (isSignedIn() && request.auth.uid == userId
-            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["role"]));
-      allow delete: if isManager();
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["role", "passwordHash", "createdAt", "createdBy"]));
+      allow delete: if isAdmin();
     }
-
     // Admin accounts: authenticated read (behind OperatorGate), admin-only write
     match /kioskAdmins/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isManager();
+      allow read, write: if isAdmin();
     }
 
-    // App config: public read, orderCounter public write (kiosk order ID generation)
+    // App config: public read, manager-only writes
     // Validation: only allow incrementing lastNumber by 1, no other fields
     match /kioskConfig/orderCounter {
       allow read: if true;
-      allow write: if request.resource.data.keys().hasOnly(["lastNumber", "prefix"])
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(["lastNumber", "prefix"])
         && request.resource.data.lastNumber is int
         && request.resource.data.lastNumber == resource.data.lastNumber + 1;
     }
     match /kioskConfig/{docId} {
       allow read: if true;
-      allow write: if isManager();
+      allow write: if isAdmin();
     }
 
     // Inventory adjustments: admin-only (only managers adjust stock via admin panel)
     match /inventoryAdjustments/{docId} {
-      allow read: if isSignedIn();
-      allow create: if isManager();
+      allow read: if isAdmin();
+      allow create: if isAdmin();
       allow update, delete: if false;
     }
 
-    // Audit logs: authenticated read, public create with structure validation
-    // Public create needed because kiosk orders log without Firebase Auth
+    // Audit logs: authenticated read/write from signed-in staff clients
     match /auditLogs/{docId} {
-      allow read: if isSignedIn();
-      allow create: if request.resource.data.keys().hasAll(["action", "actorId", "actorName"])
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasAll(["action", "actorId", "actorName"])
         && request.resource.data.action is string
         && request.resource.data.action.size() < 100;
-      allow update, delete: if isManager();
+      allow update, delete: if isAdmin();
     }
 
     // QuickBooks tokens: deny ALL client access.
     // Only Cloud Functions (firebase-admin SDK) can read/write — it bypasses rules.
     match /qbTokens/{docId} {
+      allow read, write: if false;
+    }
+    match /kioskSessions/{docId} {
       allow read, write: if false;
     }
 

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "rm -rf node_modules/.vite && vite build",
+    "build": "node -e \"require('fs').rmSync('node_modules/.vite',{recursive:true,force:true})\" && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },

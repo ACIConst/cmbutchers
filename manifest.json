@@ -2,7 +2,7 @@
   "name": "Champ's Meats",
   "short_name": "Champs Meats",
   "description": "Champ's Meats Kiosk — Halstead, KS",
-  "start_url": "/",
+  "start_url": "/kiosk",
   "display": "standalone",
   "background_color": "#0d0a07",
   "theme_color": "#9b1c1c",

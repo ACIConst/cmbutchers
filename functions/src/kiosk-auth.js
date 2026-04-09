@@ -1,4 +1,5 @@
 const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 
@@ -6,6 +7,9 @@ const BCRYPT_ROUNDS = 12;
 const ADMIN_ROLES = ["Super Admin", "Manager", "Admin", "manager", "super_admin"];
 const VALID_STAFF_ROLES = ["Employee", "Manager", "Admin", "Super Admin"];
 const MAX_STAFF_OPS_PER_IP = 10;
+const MAX_REGISTER_PER_IP = 10;
+const MAX_RESET_PER_IP = 10;
+const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 
 // --- Rate limiting (in-memory, per Cloud Function instance) ---
 const RATE_WINDOW_MS = 60 * 1000; // 1 minute
@@ -44,6 +48,91 @@ function isLegacyHash(hash) {
   return hash && hash.endsWith("_champs_bk") && hash.length === 19;
 }
 
+function normalizeEmail(email) {
+  return String(email || "").toLowerCase().trim();
+}
+
+function normalizePhone(phone) {
+  return String(phone || "").replace(/\D/g, "");
+}
+
+function normalizeStaffRole(role) {
+  if (role === "super_admin") return "Super Admin";
+  if (role === "manager") return "Manager";
+  return String(role || "").trim();
+}
+
+function buildStaffClaims(role) {
+  const normalizedRole = normalizeStaffRole(role);
+  const isStaff = VALID_STAFF_ROLES.includes(normalizedRole);
+  const isAdmin = ADMIN_ROLES.includes(normalizedRole);
+  return {
+    role: normalizedRole || null,
+    isStaff,
+    isAdmin,
+    isSuperAdmin: normalizedRole === "Super Admin",
+  };
+}
+
+async function applyStaffClaims(uid, role) {
+  await getAuth().setCustomUserClaims(uid, buildStaffClaims(role));
+}
+
+async function findUserByEmail(db, email) {
+  const snap = await db.collection("kioskUsers")
+    .where("email", "==", normalizeEmail(email))
+    .limit(1)
+    .get();
+
+  return snap.empty ? null : snap.docs[0];
+}
+
+async function createKioskSession(db, userId) {
+  const token = crypto.randomBytes(32).toString("hex");
+  await db.collection("kioskSessions").doc(token).set({
+    userId,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  });
+  return token;
+}
+
+async function validateKioskSession(db, userId, sessionToken) {
+  if (!userId || !sessionToken) {
+    throw { status: 401, message: "Session required." };
+  }
+
+  const sessionRef = db.collection("kioskSessions").doc(String(sessionToken));
+  const sessionSnap = await sessionRef.get();
+  if (!sessionSnap.exists) {
+    throw { status: 401, message: "Session expired. Please sign in again." };
+  }
+
+  const session = sessionSnap.data();
+  if (session.userId !== String(userId) || session.expiresAt < Date.now()) {
+    await sessionRef.delete().catch(() => {});
+    throw { status: 401, message: "Session expired. Please sign in again." };
+  }
+
+  return session;
+}
+
+async function findStaffProfileForAuthUser(db, decoded) {
+  let userDoc = await db.collection("kioskUsers").doc(decoded.uid).get();
+
+  if (!userDoc.exists && decoded.email) {
+    const snap = await db.collection("kioskUsers")
+      .where("email", "==", decoded.email.toLowerCase().trim())
+      .limit(1)
+      .get();
+    if (!snap.empty) {
+      userDoc = snap.docs[0];
+    }
+  }
+
+  return userDoc.exists ? userDoc : null;
+}
+
 /**
  * Verify a kiosk user's password server-side.
  * Handles both legacy FNV-1a hashes and new bcrypt hashes.
@@ -59,7 +148,7 @@ async function verifyPassword(req, res) {
     return;
   }
 
-  const { email, password } = req.body;
+  const { email, password } = req.body || {};
 
   if (!email || !password) {
     res.status(400).json({ success: false, error: "Email and password required" });
@@ -67,17 +156,12 @@ async function verifyPassword(req, res) {
   }
 
   const db = getFirestore();
-  const snap = await db.collection("kioskUsers")
-    .where("email", "==", email.toLowerCase().trim())
-    .limit(1)
-    .get();
+  const userDoc = await findUserByEmail(db, email);
 
-  if (snap.empty) {
+  if (!userDoc) {
     res.status(401).json({ success: false, error: "Invalid credentials" });
     return;
   }
-
-  const userDoc = snap.docs[0];
   const userData = userDoc.data();
   const storedHash = userData.passwordHash;
 
@@ -105,7 +189,8 @@ async function verifyPassword(req, res) {
 
   // Return user data (without passwordHash)
   const { passwordHash, ...safeUser } = userData;
-  res.json({ success: true, user: { id: userDoc.id, ...safeUser } });
+  const sessionToken = await createKioskSession(db, userDoc.id);
+  res.json({ success: true, user: { id: userDoc.id, ...safeUser, sessionToken } });
 }
 
 /**
@@ -121,7 +206,7 @@ async function hashPassword(req, res) {
     return;
   }
 
-  const { password } = req.body;
+  const { password } = req.body || {};
 
   if (!password || password.length < 8) {
     res.status(400).json({ error: "Password must be at least 8 characters" });
@@ -130,6 +215,202 @@ async function hashPassword(req, res) {
 
   const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
   res.json({ hash });
+}
+
+async function registerUser(req, res) {
+  const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+  if (isRateLimited(ip, MAX_REGISTER_PER_IP)) {
+    res.status(429).json({ success: false, error: "Too many attempts. Please wait a minute." });
+    return;
+  }
+
+  const {
+    firstName,
+    lastName,
+    email,
+    password,
+    phone,
+    deliveryLocation = "",
+  } = req.body || {};
+
+  if (!firstName || !lastName) {
+    res.status(400).json({ success: false, error: "First and last name are required" });
+    return;
+  }
+
+  const trimmedEmail = normalizeEmail(email);
+  if (!trimmedEmail || !trimmedEmail.includes("@")) {
+    res.status(400).json({ success: false, error: "Valid email required" });
+    return;
+  }
+
+  if (!password || password.length < 8) {
+    res.status(400).json({ success: false, error: "Password must be at least 8 characters" });
+    return;
+  }
+
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) {
+    res.status(400).json({ success: false, error: "Phone number required" });
+    return;
+  }
+
+  const db = getFirestore();
+  const existingUser = await findUserByEmail(db, trimmedEmail);
+  if (existingUser) {
+    res.status(409).json({ success: false, error: "An account with this email already exists. Please log in." });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  const userData = {
+    firstName: String(firstName).trim(),
+    lastName: String(lastName).trim(),
+    email: trimmedEmail,
+    phone: normalizedPhone,
+    passwordHash,
+    role: "Customer",
+    deliveryLocation: String(deliveryLocation || "").trim(),
+    createdAt: FieldValue.serverTimestamp(),
+  };
+
+  const docRef = await db.collection("kioskUsers").add(userData);
+  const safeUser = { ...userData };
+  delete safeUser.passwordHash;
+  delete safeUser.createdAt;
+  const sessionToken = await createKioskSession(db, docRef.id);
+  res.status(201).json({ success: true, user: { id: docRef.id, ...safeUser, sessionToken } });
+}
+
+async function verifyResetIdentity(req, res) {
+  const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+  if (isRateLimited(ip, MAX_RESET_PER_IP)) {
+    res.status(429).json({ success: false, error: "Too many attempts. Please wait a minute." });
+    return;
+  }
+
+  const { email, phone } = req.body || {};
+  if (!email || !phone) {
+    res.status(400).json({ success: false, error: "Email and phone number are required" });
+    return;
+  }
+
+  const db = getFirestore();
+  const userDoc = await findUserByEmail(db, email);
+  const normalizedPhone = normalizePhone(phone);
+  const matchesPhone = userDoc && normalizePhone(userDoc.data().phone) === normalizedPhone;
+
+  if (!matchesPhone) {
+    res.status(404).json({ success: false, error: "Email and phone number do not match our records." });
+    return;
+  }
+
+  res.json({ success: true });
+}
+
+async function resetPassword(req, res) {
+  const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+  if (isRateLimited(ip, MAX_RESET_PER_IP)) {
+    res.status(429).json({ success: false, error: "Too many attempts. Please wait a minute." });
+    return;
+  }
+
+  const { email, phone, password } = req.body || {};
+  if (!email || !phone || !password) {
+    res.status(400).json({ success: false, error: "Email, phone number, and new password are required" });
+    return;
+  }
+
+  if (password.length < 8) {
+    res.status(400).json({ success: false, error: "Password must be at least 8 characters" });
+    return;
+  }
+
+  const db = getFirestore();
+  const userDoc = await findUserByEmail(db, email);
+  const normalizedPhone = normalizePhone(phone);
+  const matchesPhone = userDoc && normalizePhone(userDoc.data().phone) === normalizedPhone;
+
+  if (!matchesPhone) {
+    res.status(404).json({ success: false, error: "Email and phone number do not match our records." });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  await userDoc.ref.update({ passwordHash });
+  res.json({ success: true });
+}
+
+async function getOrderHistory(req, res) {
+  const { userId, sessionToken } = req.body || {};
+  const db = getFirestore();
+
+  try {
+    await validateKioskSession(db, userId, sessionToken);
+  } catch (err) {
+    return sendError(res, err);
+  }
+
+  try {
+    const userSnap = await db.collection("kioskUsers").doc(String(userId)).get();
+    if (!userSnap.exists) {
+      return sendError(res, { status: 404, message: "Customer account not found." });
+    }
+
+    const userData = userSnap.data() || {};
+    const userName = `${userData.firstName || ""} ${userData.lastName || ""}`.trim()
+      || userData.name
+      || "";
+    const userEmail = normalizeEmail(userData.email);
+
+    const queries = [
+      db.collection("kioskOrders").where("userId", "==", String(userId)).limit(50).get(),
+    ];
+
+    if (userEmail) {
+      queries.push(
+        db.collection("kioskOrders").where("email", "==", userEmail).limit(30).get()
+      );
+    }
+
+    if (userName) {
+      queries.push(
+        db.collection("kioskOrders").where("user", "==", userName).limit(30).get()
+      );
+    }
+
+    const snaps = await Promise.all(queries);
+    const merged = new Map();
+    snaps.forEach((snap) => {
+      snap.docs.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (!data.archived) return;
+        if (!merged.has(docSnap.id)) {
+          merged.set(docSnap.id, {
+            id: docSnap.id,
+            ...data,
+            completedAt: data.completedAt || data.deliveredAt || data.archivedAt || data.placedAt || null,
+          });
+        }
+      });
+    });
+
+    const orders = [...merged.values()]
+      .sort((a, b) => {
+        const aTime = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+        const bTime = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+        return bTime - aTime;
+      })
+      .slice(0, 20);
+
+    res.json({
+      success: true,
+      orders,
+    });
+  } catch (err) {
+    console.error("Failed to load kiosk order history:", err);
+    sendError(res, { status: 500, message: "Failed to load order history." });
+  }
 }
 
 // ─── Staff management (Firebase Auth + kioskUsers) ──────────────────────────
@@ -146,29 +427,23 @@ async function verifyCallerIsAdmin(req) {
   }
   const token = authHeader.split("Bearer ")[1];
   const decoded = await getAuth().verifyIdToken(token);
-  const db = getFirestore();
-
-  // Try lookup by Auth UID first (new accounts created via createStaff)
-  let userDoc = await db.collection("kioskUsers").doc(decoded.uid).get();
-
-  // Fall back to email query (legacy accounts with auto-generated doc IDs)
-  if (!userDoc.exists && decoded.email) {
-    const snap = await db.collection("kioskUsers")
-      .where("email", "==", decoded.email.toLowerCase().trim())
-      .limit(1)
-      .get();
-    if (!snap.empty) {
-      userDoc = snap.docs[0];
-    }
+  const claimRole = normalizeStaffRole(decoded.role);
+  if (decoded.isAdmin === true && ADMIN_ROLES.includes(claimRole)) {
+    return { uid: decoded.uid, role: claimRole };
   }
 
-  if (!userDoc.exists) {
+  const db = getFirestore();
+  const userDoc = await findStaffProfileForAuthUser(db, decoded);
+  if (!userDoc) {
     throw { status: 403, message: "No admin profile found" };
   }
-  const role = userDoc.data().role;
+
+  const role = normalizeStaffRole(userDoc.data().role);
   if (!ADMIN_ROLES.includes(role)) {
     throw { status: 403, message: "Insufficient permissions" };
   }
+
+  await applyStaffClaims(decoded.uid, role);
   return { uid: decoded.uid, role };
 }
 
@@ -239,9 +514,11 @@ async function createStaff(req, res) {
       createdAt: FieldValue.serverTimestamp(),
       createdBy: caller.uid,
     });
+    await applyStaffClaims(authUser.uid, role);
   } catch (e) {
     // Rollback: delete the orphaned Firebase Auth account
     console.error("Firestore write failed, rolling back Auth account:", e);
+    await getFirestore().collection("kioskUsers").doc(authUser.uid).delete().catch(() => {});
     await getAuth().deleteUser(authUser.uid).catch(() => {});
     return sendError(res, { status: 500, message: "Failed to save staff profile" });
   }
@@ -301,12 +578,57 @@ async function updateStaff(req, res) {
       email: trimmedEmail,
       role,
     });
+    await applyStaffClaims(uid, role);
   } catch (e) {
     console.error("Firestore update failed:", e);
     return sendError(res, { status: 500, message: "Account updated but profile save failed" });
   }
 
   res.json({ success: true });
+}
+
+async function syncAdminClaims(req, res) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return sendError(res, { status: 401, message: "Authentication required" });
+  }
+
+  try {
+    const token = authHeader.split("Bearer ")[1];
+    const decoded = await getAuth().verifyIdToken(token);
+    const claimRole = normalizeStaffRole(decoded.role);
+
+    if (decoded.isAdmin === true && ADMIN_ROLES.includes(claimRole)) {
+      return res.json({
+        success: true,
+        role: claimRole,
+        isAdmin: true,
+        isSuperAdmin: claimRole === "Super Admin",
+      });
+    }
+
+    const db = getFirestore();
+    const userDoc = await findStaffProfileForAuthUser(db, decoded);
+    if (!userDoc) {
+      return sendError(res, { status: 403, message: "No admin profile found" });
+    }
+
+    const role = normalizeStaffRole(userDoc.data().role);
+    if (!ADMIN_ROLES.includes(role)) {
+      return sendError(res, { status: 403, message: "Insufficient permissions" });
+    }
+
+    await applyStaffClaims(decoded.uid, role);
+    return res.json({
+      success: true,
+      role,
+      isAdmin: true,
+      isSuperAdmin: role === "Super Admin",
+    });
+  } catch (err) {
+    console.error("Failed to sync admin claims:", err);
+    return sendError(res, { status: err.status || 500, message: err.message || "Failed to sync admin access" });
+  }
 }
 
 /**
@@ -356,4 +678,16 @@ async function deleteStaff(req, res) {
   res.json({ success: true });
 }
 
-module.exports = { verifyPassword, hashPassword, createStaff, updateStaff, deleteStaff };
+module.exports = {
+  verifyPassword,
+  hashPassword,
+  registerUser,
+  verifyResetIdentity,
+  resetPassword,
+  getOrderHistory,
+  verifyCallerIsAdmin,
+  syncAdminClaims,
+  createStaff,
+  updateStaff,
+  deleteStaff,
+};

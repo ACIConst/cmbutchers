@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { useAdminTheme } from "../../context/AdminThemeContext";
+import { useAuth } from "../../hooks/useAuth";
 import { FONT_OPTIONS, DELIVERY_LOCATIONS } from "../../styles/tokens";
-import { Modal, ConfirmModal, Field, Btn, inputSt, smallBtn } from "../../components/ui";
+import { Modal, ConfirmModal, Field, Btn } from "../../components/ui";
+import { inputSt, smallBtn } from "../../components/ui-helpers";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, CF_BASE } from "../../config/firebase";
@@ -10,6 +12,7 @@ const storage = getStorage();
 
 export function SettingsPanel({ showToast, adminAccounts, dbOps, currentAdmin, isSuperAdmin, categories }) {
   const { T: C, TF: F, theme, setTheme, fontId, setFontId, logoUrl, setLogoUrl } = useAdminTheme();
+  const { user } = useAuth();
   const [stab, setStab] = useState("appearance");
   const tabs=[{id:"appearance",label:"Appearance"},{id:"staff",label:"Staff & Access"},{id:"store",label:"Store Info"},{id:"notifications",label:"Notifications"},{id:"quickbooks",label:"QuickBooks"}];
   const cardSt={background:C.card,border:"1px solid "+C.border,borderRadius:14,padding:"20px 22px",marginBottom:18};
@@ -23,7 +26,7 @@ export function SettingsPanel({ showToast, adminAccounts, dbOps, currentAdmin, i
       {stab==="staff"&&<SettingsStaff C={C} F={F} adminAccounts={adminAccounts} dbOps={dbOps} currentAdmin={currentAdmin} isSuperAdmin={isSuperAdmin} showToast={showToast} cardSt={cardSt} secTitle={secTitle}/>}
       {stab==="store"&&<SettingsStoreInfo C={C} F={F} showToast={showToast} cardSt={cardSt} secTitle={secTitle}/>}
       {stab==="notifications"&&<SettingsNotifications C={C} F={F} cardSt={cardSt} secTitle={secTitle}/>}
-      {stab==="quickbooks"&&<SettingsQuickBooks C={C} F={F} showToast={showToast} cardSt={cardSt} secTitle={secTitle} isSuperAdmin={isSuperAdmin} categories={categories}/>}
+      {stab==="quickbooks"&&<SettingsQuickBooks C={C} F={F} showToast={showToast} cardSt={cardSt} secTitle={secTitle} isSuperAdmin={isSuperAdmin} categories={categories} currentUser={user}/>}
     </div>
   );
 }
@@ -108,7 +111,7 @@ function SettingsStaff({C,F,adminAccounts,dbOps,currentAdmin,isSuperAdmin,showTo
   );
 }
 
-function StaffModal({account,isNew,saving,roles,isSuperAdmin,onChange,onSave,onClose,C,F}){
+function StaffModal({account,isNew,saving,roles,isSuperAdmin,onChange,onSave,onClose,C}){
   const [showPass,setShowPass]=useState(false);const invalid=!account.name.trim()||!account.email.trim()||(isNew&&account.password.length<8);
   const cantPromote=!isSuperAdmin&&account.role==="Super Admin";
   return(<Modal t={C} title={isNew?"Add Staff Member":"Edit Staff Member"} onClose={onClose}>
@@ -121,7 +124,7 @@ function StaffModal({account,isNew,saving,roles,isSuperAdmin,onChange,onSave,onC
   </Modal>);
 }
 
-function SettingsStoreInfo({C,F,showToast,cardSt,secTitle}){
+function SettingsStoreInfo({C,showToast,cardSt,secTitle}){
   const [info,setInfo]=useState({name:"",address:"",phone:"",hours:""});
   const [loaded,setLoaded]=useState(false);const [saving,setSaving]=useState(false);
   useEffect(()=>{getDoc(doc(db,"kioskConfig","storeInfo")).then(snap=>{if(snap.exists())setInfo(prev=>({...prev,...snap.data()}));}).catch(()=>{}).finally(()=>setLoaded(true));},[]);
@@ -179,7 +182,7 @@ function qbErrMsg(e) {
   return msg;
 }
 
-function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categories}){
+function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categories,currentUser}){
   const [status,setStatus]=useState(null);const [loading,setLoading]=useState(true);const [acting,setActing]=useState(false);
   const [companyName,setCompanyName]=useState(null);
   const [showProductPicker,setShowProductPicker]=useState(false);
@@ -193,25 +196,47 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
   const QB_IMPORT_URL=QB_BASE+"/qbImportSelected";
   const QB_REFRESH_URL=QB_BASE+"/qbRefreshStock";
 
+  async function authHeaders(extra = {}) {
+    const token = await currentUser?.getIdToken();
+    if (!token) throw new Error("Admin sign-in required");
+    return { ...extra, Authorization: `Bearer ${token}` };
+  }
+
+  async function fetchAdminJson(url, options = {}) {
+    const headers = await authHeaders(options.headers || {});
+    const response = await fetch(url, { ...options, headers });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.success === false) {
+      throw new Error(data.error || `Request failed (${response.status})`);
+    }
+    return data;
+  }
+
   useEffect(()=>{
     getDoc(doc(db,"kioskConfig","qbConnection")).then(snap=>{
       if(snap.exists())setStatus(snap.data());
     }).catch(()=>{}).finally(()=>setLoading(false));
-  },[]);
+  }, [showToast]);
 
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
     const qb=params.get("qb");
     if(qb==="connected"){showToast("QuickBooks connected successfully");window.history.replaceState({},"","/admin");}
     if(qb==="error"){showToast("QuickBooks connection failed","error");window.history.replaceState({},"","/admin");}
-  },[]);
+  }, [showToast]);
 
-  async function handleConnect(){setActing(true);window.location.href=QB_AUTH_URL;}
+  async function handleConnect(){
+    setActing(true);
+    try{
+      const data=await fetchAdminJson(QB_AUTH_URL,{method:"POST"});
+      if(!data.url)throw new Error("Unable to start QuickBooks connection");
+      window.location.href=data.url;
+    }catch(e){console.error(e);showToast(qbErrMsg(e),"error");setActing(false);}
+  }
   async function handleDisconnect(){
     setActing(true);
     try{
-      const res=await fetch(QB_DISCONNECT_URL,{method:"POST"});
-      if(!res.ok)throw new Error("Disconnect failed");
+      await fetchAdminJson(QB_DISCONNECT_URL,{method:"POST"});
       await setDoc(doc(db,"kioskConfig","qbConnection"),{connected:false,disconnectedAt:Date.now()},{merge:true});
       setStatus({connected:false});setCompanyName(null);showToast("QuickBooks disconnected");
     }catch(e){console.error(e);showToast("Failed to disconnect","error");}finally{setActing(false);}
@@ -220,18 +245,15 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
   async function handleTestConnection(){
     setActing(true);
     try{
-      const res=await fetch(QB_TEST_URL);
-      const data=await res.json();
-      if(data.success){setCompanyName(data.companyName);showToast("Connected to "+data.companyName);}
-      else throw new Error(data.error);
+      const data=await fetchAdminJson(QB_TEST_URL);
+      setCompanyName(data.companyName);showToast("Connected to "+data.companyName);
     }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setActing(false);}
   }
 
   async function handleSyncProducts(){
     setActing(true);
     try{
-      const res=await fetch(QB_SYNC_URL);
-      const data=await res.json();
+      const data=await fetchAdminJson(QB_SYNC_URL);
       if(data.products){setQbProducts(data.products);setShowProductPicker(true);showToast(`Found ${data.count} products in QuickBooks`);}
       else throw new Error(data.error);
     }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setActing(false);}
@@ -242,20 +264,16 @@ function SettingsQuickBooks({C,F,showToast,cardSt,secTitle,isSuperAdmin,categori
     if(items.length===0){showToast("No products selected","error");return;}
     setImporting(true);
     try{
-      const res=await fetch(QB_IMPORT_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:items.map(p=>({qbItemId:p.qbItemId,name:p.name,price:p.price,description:p.description,sku:p.sku,stock:p.stock,category:p.category||"Uncategorized"}))})});
-      const data=await res.json();
-      if(data.success){showToast(`Imported ${data.created} new, updated ${data.updated} existing`);setShowProductPicker(false);setSelectedProducts({});}
-      else throw new Error(data.error);
+      const data=await fetchAdminJson(QB_IMPORT_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:items.map(p=>({qbItemId:p.qbItemId,name:p.name,price:p.price,description:p.description,sku:p.sku,stock:p.stock,category:p.category||"Uncategorized"}))})});
+      showToast(`Imported ${data.created} new, updated ${data.updated} existing`);setShowProductPicker(false);setSelectedProducts({});
     }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setImporting(false);}
   }
 
   async function handleRefreshStock(){
     setRefreshing(true);
     try{
-      const res=await fetch(QB_REFRESH_URL);
-      const data=await res.json();
-      if(data.success)showToast(`Refreshed: ${data.updated} of ${data.total} items updated, ${data.images||0} images synced`);
-      else throw new Error(data.error);
+      const data=await fetchAdminJson(QB_REFRESH_URL);
+      showToast(`Refreshed: ${data.updated} of ${data.total} items updated, ${data.images||0} images synced`);
     }catch(e){console.error(e);showToast(qbErrMsg(e),"error");}finally{setRefreshing(false);}
   }
 

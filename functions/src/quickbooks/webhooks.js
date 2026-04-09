@@ -1,7 +1,5 @@
 const crypto = require("crypto");
-const { defineString } = require("firebase-functions/params");
-
-const QB_WEBHOOK_VERIFIER = defineString("QB_WEBHOOK_VERIFIER");
+const { QB_WEBHOOK_VERIFIER } = require("./params");
 
 /**
  * Verify and handle QuickBooks webhook notifications.

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useAdminTheme } from "../../context/AdminThemeContext";
 import { DELIVERY_LOCATIONS } from "../../styles/tokens";
-import { Modal, ConfirmModal, Field, Btn, inputSt, smallBtn } from "../../components/ui";
+import { Modal, ConfirmModal, Field, Btn } from "../../components/ui";
+import { inputSt, smallBtn } from "../../components/ui-helpers";
 
 export function UserManager({ users: allUsers, dbOps, showToast, isMobile }) {const{T:C,TF:F}=useAdminTheme();
   const ADMIN_ROLES=["super_admin","manager","Super Admin","Admin","Manager","Employee"];

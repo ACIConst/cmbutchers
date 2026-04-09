@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useAdminTheme } from "../../context/AdminThemeContext";
-import { Btn, inputSt, smallBtn } from "../../components/ui";
+import { Btn } from "../../components/ui";
+import { inputSt, smallBtn } from "../../components/ui-helpers";
 import { writeBatch, doc } from "firebase/firestore";
 import { db } from "../../config/firebase";
 
@@ -9,7 +10,7 @@ export function CategoriesManager({ categories, menu, dbOps, showToast, isMobile
   const [dragIdx,setDragIdx]=useState(null);const [overIdx,setOverIdx]=useState(null);const dragNodeRef=useRef(null);const [reordering,setReordering]=useState(false);
   async function handleAdd(){const name=newName.trim();if(!name)return;if(categories.find(c=>c.name.toLowerCase()===name.toLowerCase())){showToast("That category already exists","error");return;}setSaving(true);try{await dbOps.addCategory(name);setNewName("");showToast('"'+name+'" category added');inputRef.current?.focus();}catch(e){console.error(e);showToast("Add failed","error");}finally{setSaving(false);}}
   async function handleRename(id){const name=editName.trim();if(!name)return;if(categories.find(c=>c.name.toLowerCase()===name.toLowerCase()&&c.id!==id)){showToast("That name is already taken","error");return;}setSaving(true);try{await dbOps.renameCategory(id,name);setEditingId(null);showToast("Category renamed");}catch(e){console.error(e);showToast("Rename failed","error");}finally{setSaving(false);}}
-  async function handleDelete(cat){const inUse=menu.filter(i=>i.category===cat.name).length;if(inUse>0){try{const batch=writeBatch(db);menu.filter(i=>i.category===cat.name).forEach(item=>{batch.update(doc(db,"kioskMenu",item.id),{category:"Uncategorized"});});batch.delete(doc(db,"kioskCategories",cat.id));await batch.commit();showToast('"'+cat.name+'" deleted \u2014 '+inUse+' item'+(inUse!==1?"s":"")+" moved to Uncategorized");}catch(e){console.error(e);showToast("Delete failed","error");}}else{try{await dbOps.deleteCategory(cat.id);showToast('"'+cat.name+'" removed',"error");}catch(e){console.error(e);showToast("Delete failed","error");}}}
+  async function handleDelete(cat){const inUse=menu.filter(i=>i.category===cat.name).length;if(inUse>0){try{const fallbackCategory=categories.find(c=>c.name==="Other")?"Other":(categories.find(c=>c.id!==cat.id)?.name||"Other");const batch=writeBatch(db);menu.filter(i=>i.category===cat.name).forEach(item=>{batch.update(doc(db,"kioskMenu",item.id),{category:fallbackCategory});});batch.delete(doc(db,"kioskCategories",cat.id));await batch.commit();showToast('"'+cat.name+'" deleted \u2014 '+inUse+' item'+(inUse!==1?"s":"")+" moved to "+fallbackCategory);}catch(e){console.error(e);showToast("Delete failed","error");}}else{try{await dbOps.deleteCategory(cat.id);showToast('"'+cat.name+'" removed',"error");}catch(e){console.error(e);showToast("Delete failed","error");}}}
   function handleDragStart(e,idx){setDragIdx(idx);dragNodeRef.current=e.target.closest("[data-cat-row]");e.dataTransfer.effectAllowed="move";setTimeout(()=>{if(dragNodeRef.current)dragNodeRef.current.style.opacity="0.35";},0);}
   function handleDragOver(e,idx){e.preventDefault();e.dataTransfer.dropEffect="move";if(idx!==overIdx)setOverIdx(idx);}
   function handleDragEnd(){if(dragNodeRef.current)dragNodeRef.current.style.opacity="1";setDragIdx(null);setOverIdx(null);dragNodeRef.current=null;}

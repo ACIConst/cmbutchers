@@ -24,7 +24,7 @@ export default defineConfig({
           {
             urlPattern: /^https:\/\/.*\.firebasestorage\.app\/.*/i,
             handler: 'StaleWhileRevalidate',
-            options: { cacheName: 'firebase-images', expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 * 30 } }
+            options: { cacheName: 'firebase-images', expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 } }
           }
         ]
       },

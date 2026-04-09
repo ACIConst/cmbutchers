@@ -5,21 +5,36 @@ import { C, F } from "../../styles/tokens";
 function ModeCard({ title, desc, accent, onClick }) {
   const [hov, setHov] = useState(false);
   return (
-    <div onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} className="touch-active"
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      className="touch-active"
       style={{
-        background: C.card, border: `1px solid ${hov ? accent : C.borderMid}`, borderRadius: 16,
-        padding: "36px 32px", width: 240, display: "flex", flexDirection: "column", textAlign: "center",
-        cursor: "pointer", transform: hov ? "translateY(-5px)" : "none", transition: "all .2s ease",
+        background: C.card,
+        border: `1px solid ${hov ? accent : C.borderMid}`,
+        borderRadius: 16,
+        padding: "36px 32px",
+        width: 240,
+        display: "flex",
+        flexDirection: "column",
+        textAlign: "center",
+        cursor: "pointer",
+        transform: hov ? "translateY(-5px)" : "none",
+        transition: "all .2s ease",
         boxShadow: hov ? `0 16px 40px rgba(0,0,0,.5), 0 0 0 1px ${accent}44` : "0 4px 16px rgba(0,0,0,.35)",
         animation: "fadeUp .35s ease",
-      }}>
+        appearance: "none",
+      }}
+    >
       <div style={{ width: 32, height: 3, background: accent, borderRadius: 2, margin: "0 auto 20px" }} />
       <div style={{ fontFamily: F.display, fontSize: 21, fontWeight: 900, color: C.cream, letterSpacing: 1, marginBottom: 10, lineHeight: 1.2 }}>{title}</div>
       <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, flex: 1, marginBottom: 24 }}>{desc}</div>
       <div style={{ background: accent, color: C.cream, borderRadius: 9, padding: "11px 0", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>
-        Enter →
+        Enter {"->"}
       </div>
-    </div>
+    </button>
   );
 }
 

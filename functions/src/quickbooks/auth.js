@@ -1,14 +1,15 @@
 const OAuthClient = require("intuit-oauth");
 const { getFirestore } = require("firebase-admin/firestore");
-const { defineString } = require("firebase-functions/params");
 const { encrypt, decrypt } = require("./crypto");
+const {
+  QB_CLIENT_ID,
+  QB_CLIENT_SECRET,
+  QB_REDIRECT_URI,
+  QB_ENVIRONMENT,
+  QB_APP_URL,
+} = require("./params");
 
-// These are set via: firebase functions:secrets:set QB_CLIENT_ID, etc.
-const QB_CLIENT_ID = defineString("QB_CLIENT_ID");
-const QB_CLIENT_SECRET = defineString("QB_CLIENT_SECRET");
-const QB_REDIRECT_URI = defineString("QB_REDIRECT_URI");
-const QB_ENVIRONMENT = defineString("QB_ENVIRONMENT"); // "sandbox" or "production"
-const QB_APP_URL = defineString("QB_APP_URL"); // Your frontend URL (e.g., https://testing-and-development-f696f.web.app)
+// These are configured in Firebase params/secrets.
 
 function createOAuthClient() {
   return new OAuthClient({
@@ -35,12 +36,17 @@ async function authUri(req, res) {
     expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
   });
 
-  const authUri = oauthClient.authorizeUri({
+  const authUrl = oauthClient.authorizeUri({
     scope: [OAuthClient.scopes.Accounting],
     state: csrfToken,
   });
 
-  res.redirect(authUri);
+  if (req.method === "POST") {
+    res.json({ success: true, url: authUrl });
+    return;
+  }
+
+  res.redirect(authUrl);
 }
 
 /**

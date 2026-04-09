@@ -69,7 +69,7 @@ export const ORDER_STATUSES = [
   { id:"picking",          label:"Picking",           color:"#1e40af", text:"#93c5fd" },
   { id:"out_for_delivery", label:"Out for Delivery",  color:"#0e7490", text:"#67e8f9" },
   { id:"delivered",        label:"Delivered",          color:"#166534", text:"#4ade80" },
-  
+  { id:"cancelled",        label:"Cancelled",          color:"#7f1d1d", text:"#fca5a5" },
 ];
 
 // Valid status transitions (forward only, no skipping)

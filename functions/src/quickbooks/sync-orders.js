@@ -223,12 +223,9 @@ async function sendInvoice(req, res) {
 
     // Send invoice email — QB requires Content-Type: application/octet-stream (not JSON)
     const { getValidToken } = require("./tokens");
-    const { defineString } = require("firebase-functions/params");
+    const { getBaseUrl } = require("./api");
     const { accessToken, realmId } = await getValidToken();
-    const env = defineString("QB_ENVIRONMENT").value();
-    const baseUrl = env === "production"
-      ? "https://quickbooks.api.intuit.com/v3/company"
-      : "https://sandbox-quickbooks.api.intuit.com/v3/company";
+    const baseUrl = getBaseUrl();
 
     const sendRes = await fetch(
       `${baseUrl}/${realmId}/invoice/${order.qbInvoiceId}/send?sendTo=${encodeURIComponent(email)}&minorversion=75`,

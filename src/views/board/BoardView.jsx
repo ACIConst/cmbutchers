@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { C, F, ORDER_STATUSES, normalizeStatus, canTransition } from "../../styles/tokens";
-import { useOrders, createDbOps, useMenu, useUsers } from "../../hooks/useFirestore";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { C, F, normalizeStatus } from "../../styles/tokens";
+import { useOrders, useMenu } from "../../hooks/useFirestore";
+import { createDbOps } from "../../hooks/useAdminFirestore";
 import { useNavigate } from "react-router-dom";
-import { ModeLoadingScreen, openPrintWindow } from "../../components/ui";
+import { ModeLoadingScreen } from "../../components/ui";
+import { openPrintWindow, escapeHtml, escapeAttribute, toJsStringLiteral } from "../../components/ui-helpers";
 import { getWeekOf } from "../../utils";
-import { useAuth } from "../../context/AuthContext";
+import { useAuth } from "../../hooks/useAuth";
 
 // ─── Kanban column definitions (5 visible columns) ──────────────────────────
 const COLUMNS = [
@@ -42,10 +44,9 @@ export default function BoardView() {
   const navigate = useNavigate();
   const { orders, ready: ordersReady } = useOrders(500);
   const { menu, ready: menuReady } = useMenu();
-  const { users, ready: usersReady } = useUsers();
   const dbOps = useMemo(() => createDbOps(menu, []), [menu]);
 
-  if (!ordersReady || !menuReady || !usersReady) {
+  if (!ordersReady || !menuReady) {
     return <ModeLoadingScreen label="Loading Order Board..." />;
   }
 
@@ -152,8 +153,8 @@ function OrderBoard({ orders, dbOps, onExit }) {
     const orderNum = String(order.orderNumber || "0000");
     const html = `<!DOCTYPE html>
 <html><head><title>Pick Ticket #${order.orderNumber || "\u2014"}</title>
-<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <style>
   @page{size:80mm auto;margin:4mm}
   *{margin:0;padding:0;box-sizing:border-box}
@@ -213,7 +214,7 @@ ${items.map((i, idx) => `  <div class="item">
     ${items.map((i, idx) => (i.sku && !i.barcodeImage) ? `try{JsBarcode("#item-bc-${idx}","${i.sku}",{format:"CODE128",width:1.4,height:26,displayValue:false});}catch(e){console.warn("Barcode render failed:",e);}` : "").join("\n    ")}
     window.print();
   };
-<\/script>
+</script>
 </body></html>`;
     openPrintWindow(html, showToast);
   }
@@ -239,12 +240,6 @@ ${items.map((i, idx) => `  <div class="item">
   }, [active]);
 
   const readyForDeliveryCount = active.filter(o => normalizeStatus(o.status) === "out_for_delivery").length;
-
-  // ── Get valid next statuses for an order ──
-  function getNextStatuses(order) {
-    const cur = normalizeStatus(order.status);
-    return ORDER_STATUSES.filter(s => canTransition(cur, s.id));
-  }
 
   // ── Render a single order card ──
   function renderCard(order, column) {

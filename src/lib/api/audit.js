@@ -30,19 +30,27 @@ export async function writeAuditLog({
   before = null,
   after = null,
 }) {
+  const data = {
+    action,
+    actorId: actorId || "system",
+    actorName: actorName || "system",
+    targetType,
+    targetId,
+    summary,
+    before: sanitize(before),
+    after: sanitize(after),
+    createdAt: serverTimestamp(),
+  };
   try {
-    await addDoc(collection(db, "auditLogs"), {
-      action,
-      actorId: actorId || "system",
-      actorName: actorName || "system",
-      targetType,
-      targetId,
-      summary,
-      before: sanitize(before),
-      after: sanitize(after),
-      createdAt: serverTimestamp(),
-    });
+    await addDoc(collection(db, "auditLogs"), data);
   } catch (e) {
-    console.warn("Audit log failed:", e);
+    // Retry once after 1s for transient failures
+    console.warn("Audit log failed, retrying:", e.message);
+    try {
+      await new Promise(r => setTimeout(r, 1000));
+      await addDoc(collection(db, "auditLogs"), data);
+    } catch (e2) {
+      console.warn("Audit log retry failed:", e2.message);
+    }
   }
 }

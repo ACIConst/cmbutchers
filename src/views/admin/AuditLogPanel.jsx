@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAdminTheme } from "../../context/AdminThemeContext";
-import { inputSt } from "../../components/ui";
+import { inputSt } from "../../components/ui-helpers";
 
 export function AuditLogPanel({ auditLogs }) {const{T:C,TF:F}=useAdminTheme();
   const [search, setSearch] = useState("");

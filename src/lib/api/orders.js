@@ -40,9 +40,9 @@ export async function placeOrder({ orderData, menu, actor = {} }) {
       // Read all stock docs fresh inside the transaction
       const freshSnaps = await Promise.all(stockOps.map((op) => transaction.get(op.ref)));
 
-      // Decrement stock from fresh values
+      // Decrement stock from fresh values — fail if any referenced item is missing
       freshSnaps.forEach((snap, i) => {
-        if (!snap.exists()) return;
+        if (!snap.exists()) throw new Error(`Menu item ${stockOps[i].ref.id} no longer exists`);
         const currentStock = snap.data().stock ?? 0;
         const newStock = Math.max(0, currentStock - stockOps[i].deduct);
         const updates = { stock: newStock, updatedAt: serverTimestamp() };
@@ -100,25 +100,31 @@ export async function updateOrder(id, data, actor = {}) {
 
 export async function updateOrderStatus(id, nextStatus, actor = {}) {
   const ref = doc(db, "kioskOrders", id);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) throw new Error("Order not found");
-  const order = { id: snap.id, ...snap.data() };
-  const currentStatus = normalizeStatus(order.status);
   const normalizedNext = normalizeStatus(nextStatus);
   const force = actor.force === true;
+  let currentStatus;
+  let orderNumber;
 
-  if (!force && currentStatus !== normalizedNext && !canTransition(currentStatus, normalizedNext)) {
-    throw new Error(`Invalid transition: ${currentStatus} -> ${normalizedNext}`);
-  }
-
-  const payload = {
-    status: normalizedNext,
-    statusHistory: buildStatusHistory(order, normalizedNext, actor.actorName || "system"),
-    updatedAt: serverTimestamp(),
-  };
-  if (normalizedNext === "delivered") payload.deliveredAt = serverTimestamp();
   try {
-    await updateDoc(ref, payload);
+    await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(ref);
+      if (!snap.exists()) throw new Error("Order not found");
+      const order = { id: snap.id, ...snap.data() };
+      currentStatus = normalizeStatus(order.status);
+      orderNumber = order.orderNumber || id;
+
+      if (!force && currentStatus !== normalizedNext && !canTransition(currentStatus, normalizedNext)) {
+        throw new Error(`Invalid transition: ${currentStatus} -> ${normalizedNext}`);
+      }
+
+      const payload = {
+        status: normalizedNext,
+        statusHistory: buildStatusHistory(order, normalizedNext, actor.actorName || "system"),
+        updatedAt: serverTimestamp(),
+      };
+      if (normalizedNext === "delivered") payload.deliveredAt = serverTimestamp();
+      transaction.update(ref, payload);
+    });
   } catch (e) {
     throw new Error(`Failed to update order status: ${e.message}`);
   }
@@ -128,7 +134,7 @@ export async function updateOrderStatus(id, nextStatus, actor = {}) {
     actorName: actor.actorName || "system",
     targetType: "order",
     targetId: id,
-    summary: `Order ${order.orderNumber || id} moved to ${normalizedNext}`,
+    summary: `Order ${orderNumber} moved to ${normalizedNext}`,
     before: { status: currentStatus },
     after: { status: normalizedNext },
   });

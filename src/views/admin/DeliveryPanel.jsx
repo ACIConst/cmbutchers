@@ -1,10 +1,8 @@
 import { useState } from "react";
 import { useAdminTheme } from "../../context/AdminThemeContext";
 import { normalizeStatus } from "../../styles/tokens";
-import { addDoc, collection } from "firebase/firestore";
-import { db } from "../../config/firebase";
 
-export function DeliveryPanel({ orders, users, dbOps, showToast, isMobile }) {const{T:C,TF:F}=useAdminTheme();
+export function DeliveryPanel({ orders, dbOps, showToast, isMobile }) {const{T:C,TF:F}=useAdminTheme();
   const [savingId,setSavingId]=useState(null);
   const deliveryOrders=orders.filter(o=>!o.archived&&normalizeStatus(o.status)==="out_for_delivery");
   const locations=[...new Set(deliveryOrders.map(o=>o.deliveryLocation||"No Location"))].sort();
@@ -15,7 +13,7 @@ export function DeliveryPanel({ orders, users, dbOps, showToast, isMobile }) {co
   const deliveredLocations=[...new Set(deliveredThisWeek.map(o=>o.deliveryLocation||"No Location"))].sort();
   const weekTotal=deliveredThisWeek.reduce((s,o)=>s+(o.total||0),0);
 
-  async function markDelivered(order){setSavingId(order.id);try{const deliveredAt=new Date().toISOString();await dbOps.updateOrder(order.id,{status:"delivered",archived:true,archivedAt:deliveredAt,deliveredAt});if(order.user){const matchedUser=users.find(u=>u.name===order.user||((u.firstName||"")+" "+(u.lastName||"")).trim()===order.user);if(matchedUser){await addDoc(collection(db,"kioskUsers",matchedUser.id,"completedOrders"),{orderNumber:order.orderNumber||null,items:order.items||[],total:order.total||0,placedAt:order.ts||null,completedAt:deliveredAt});}}showToast("Delivered \u2713");}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingId(null);}}
+  async function markDelivered(order){setSavingId(order.id);try{const deliveredAt=new Date().toISOString();await dbOps.updateOrder(order.id,{status:"delivered",archived:true,archivedAt:deliveredAt,deliveredAt});showToast("Delivered \u2713");}catch(e){console.error(e);showToast("Failed","error");}finally{setSavingId(null);}}
   async function markAllDelivered(loc){const locOrders=deliveryOrders.filter(o=>(o.deliveryLocation||"No Location")===loc);for(const order of locOrders){await markDelivered(order);}}
 
   return(
@@ -35,7 +33,7 @@ export function DeliveryPanel({ orders, users, dbOps, showToast, isMobile }) {co
                   <div style={{flex:1,minWidth:0}}><div style={{fontSize:15,color:C.cream,fontWeight:600}}>#{order.orderNumber||""} — {order.user||"Unknown"}</div><div style={{fontSize:12,color:C.muted,marginTop:2}}>{order.items?.map(i=>i.name+" \u00D7"+i.quantity).join(", ")}</div><div style={{fontSize:12,color:C.muted,marginTop:1}}>{order.ts?new Date(order.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):""}</div></div>
                   <div style={{display:"flex",alignItems:"center",justifyContent:isMobile?"space-between":"flex-end",gap:12}}>
                     <div style={{fontFamily:F.display,fontSize:20,fontWeight:900,color:C.red,flexShrink:0}}>${(order.total||0).toFixed(2)}</div>
-                    <button onClick={()=>markDelivered(order)} disabled={savingId===order.id} style={{background:"#6b21a8",color:"#d8b4fe",border:"1px solid #7c3aed",borderRadius:10,padding:"10px 20px",cursor:savingId===order.id?"wait":"pointer",fontFamily:F.display,fontSize:14,fontWeight:900,letterSpacing:1,textTransform:"uppercase",opacity:savingId===order.id?.6:1,whiteSpace:"nowrap"}}>{savingId===order.id?"...":"Delivered"}</button>
+                    <button onClick={()=>markDelivered(order)} disabled={savingId===order.id} style={{background:"#6b21a8",color:"#d8b4fe",border:"1px solid #7c3aed",borderRadius:10,padding:"10px 20px",cursor:savingId===order.id?"wait":"pointer",fontFamily:F.display,fontSize:14,fontWeight:900,letterSpacing:1,textTransform:"uppercase",opacity:savingId===order.id ? 0.6 : 1,whiteSpace:"nowrap"}}>{savingId===order.id?"...":"Delivered"}</button>
                   </div>
                 </div>))}</div>
             </div>);})}

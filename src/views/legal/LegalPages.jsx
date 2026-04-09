@@ -14,7 +14,7 @@ const S = {
 
 const BUSINESS = "Champ's Butcher Shop";
 const CONTACT_EMAIL = "frank@andaleconstruction.com";
-const ADDRESS = "135 Main Street, Halstead, KS 67056"; // TODO: Frank will provide
+const ADDRESS = "135 Main Street, Halstead, KS 67056";
 const EFFECTIVE_DATE = "April 3, 2026";
 
 export function PrivacyPolicy() {

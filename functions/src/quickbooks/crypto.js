@@ -1,7 +1,5 @@
 const crypto = require("crypto");
-const { defineString } = require("firebase-functions/params");
-
-const QB_ENCRYPTION_KEY = defineString("QB_ENCRYPTION_KEY");
+const { QB_ENCRYPTION_KEY } = require("./params");
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;

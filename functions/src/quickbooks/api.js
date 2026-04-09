@@ -1,7 +1,5 @@
 const { getValidToken } = require("./tokens");
-const { defineString } = require("firebase-functions/params");
-
-const QB_ENVIRONMENT = defineString("QB_ENVIRONMENT");
+const { QB_ENVIRONMENT } = require("./params");
 
 function getBaseUrl() {
   return QB_ENVIRONMENT.value() === "production"
@@ -98,4 +96,4 @@ async function qbQuery(query) {
   return qbGet(`query?query=${encoded}`);
 }
 
-module.exports = { qbGet, qbPost, qbQuery };
+module.exports = { getBaseUrl, qbGet, qbPost, qbQuery };
